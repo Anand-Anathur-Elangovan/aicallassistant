@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { SiteHeader } from "@/components/SiteHeader";
 import { useRouter } from "next/navigation";
 
 type Business = {
@@ -361,23 +362,18 @@ export default function Dashboard() {
 
   return (
     <div className="flex-1 flex flex-col">
-      <header className="border-b px-6 py-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold">AI Receptionist</h1>
-        <div className="flex items-center gap-4">
-          <button
-            type="button"
-            onClick={toggleDark}
-            className="text-sm px-3 py-1.5 border rounded-lg hover:bg-gray-50"
-            aria-label="Toggle dark mode"
-            title={dark ? "Switch to light mode" : "Switch to dark mode"}
-          >
-            {dark ? "Light" : "Dark"}
-          </button>
-          <span className="text-sm text-gray-500">{business?.name || "No business"}</span>
-          {business?.vapi_assistant_id && <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">Live</span>}
-          <button onClick={logout} className="text-sm text-red-500 hover:underline">Logout</button>
-        </div>
-      </header>
+      <SiteHeader
+        darkToggle
+        dark={dark}
+        onToggleDark={toggleDark}
+        rightSlot={
+          <>
+            <span className="text-sm text-gray-500 hidden md:inline">{business?.name || "No business"}</span>
+            {business?.vapi_assistant_id && <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">Live</span>}
+            <button onClick={logout} className="text-sm text-red-500 hover:underline">Logout</button>
+          </>
+        }
+      />
 
       <div className="flex-1 flex">
         <nav className="w-48 border-r p-4 space-y-1 overflow-auto">

@@ -14,8 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Receptionist",
-  description: "AI-powered phone receptionist for your business",
+  title: "AI Receptionist · NexCraft Tech",
+  description:
+    "AI-powered phone receptionist by NexCraft Technologies — answer calls 24/7, book visits, and never miss a customer.",
 };
 
 export default function RootLayout({
