@@ -122,8 +122,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // transferToAgent
-    if (fnName === "transferToAgent") {
+    // transferToAgent — Live Call Control transfer (same call bridged to human)
+    if (fnName === "transferToAgent" || fnName === "transfer_call") {
       const { data: agents } = await supabaseAdmin
         .from("agents")
         .select("*")
@@ -140,16 +140,91 @@ export async function POST(req: NextRequest) {
         if (deptAgent) targetAgent = deptAgent;
       }
 
-      if (!targetAgent) {
+      if (!targetAgent?.phone) {
         return NextResponse.json({
           result:
             "I'm sorry, no team members are currently available. Can I take a message with your name and number? I'll make sure they call you back as soon as possible.",
         });
       }
 
+      const controlUrl =
+        call?.monitor?.controlUrl ||
+        message?.call?.monitor?.controlUrl ||
+        body?.call?.monitor?.controlUrl;
+
+      const holdMessage =
+        business.transfer_message ||
+        `Please hold while I connect you to ${targetAgent.name}.`;
+
+      // Context note for warm handoff (spoken to operator on capable carriers)
+      const handoffNote = [
+        args.reason ? `Reason: ${args.reason}` : null,
+        args.department ? `Department: ${args.department}` : null,
+        `Caller requested transfer to ${targetAgent.name}.`,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      if (controlUrl) {
+        try {
+          const transferRes = await fetch(`${controlUrl}/control`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "transfer",
+              destination: {
+                type: "number",
+                number: targetAgent.phone,
+                transferPlan: {
+                  mode: "warm-transfer-say-summary",
+                  message: handoffNote,
+                },
+              },
+              content: holdMessage,
+            }),
+          });
+
+          if (!transferRes.ok) {
+            const errText = await transferRes.text();
+            console.error("Transfer control failed:", transferRes.status, errText);
+            // Fallback: cold transfer without warm plan (free Vapi numbers / intl often need this)
+            const coldRes = await fetch(`${controlUrl}/control`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                type: "transfer",
+                destination: {
+                  type: "number",
+                  number: targetAgent.phone,
+                },
+                content: holdMessage,
+              }),
+            });
+            if (!coldRes.ok) {
+              const coldErr = await coldRes.text();
+              console.error("Cold transfer failed:", coldRes.status, coldErr);
+              return NextResponse.json({
+                result:
+                  "I wasn't able to connect you right now. Transfers from this line may not support that destination yet. I can take your name and number for a callback, or share the showroom phone numbers.",
+              });
+            }
+          }
+
+          return NextResponse.json({
+            result: `Connecting you to ${targetAgent.name} at ${targetAgent.phone} now. ${holdMessage}`,
+          });
+        } catch (err) {
+          console.error("Transfer error:", err);
+          return NextResponse.json({
+            result:
+              "There was a technical issue transferring the call. I can take a message with your name and number instead.",
+          });
+        }
+      }
+
+      // No control URL — ask assistant to give the number (cannot bridge without control API)
       return NextResponse.json({
-        result: `Transferring to ${targetAgent.name}. ${business.transfer_message || "Please hold."}`,
-        forwardingPhoneNumber: targetAgent.phone,
+        result: `I can't bridge the call from this session, but you can reach ${targetAgent.name} on ${targetAgent.phone}. Would you like me to take a callback message instead?`,
       });
     }
 
@@ -228,9 +303,18 @@ export async function POST(req: NextRequest) {
     let callSummary = summary;
     if (!callSummary && transcript) {
       callSummary = await callClaude(
-        "You summarize phone call transcripts concisely. Include: caller's main request, outcome, any action items, and whether the call was transferred.",
+        "You summarize phone call transcripts in plain text only. No markdown, no # headers, no **bold**. Use short labeled lines like: Request: ... Outcome: ... Action items: ... Transferred: yes/no.",
         `Summarize this call transcript:\n\n${transcript}`
       );
+    }
+    // Strip markdown if model still returns it
+    if (callSummary) {
+      callSummary = callSummary
+        .replace(/^#{1,6}\s+/gm, "")
+        .replace(/\*\*([^*]+)\*\*/g, "$1")
+        .replace(/\*([^*]+)\*/g, "$1")
+        .replace(/`([^`]+)`/g, "$1")
+        .trim();
     }
 
     const startedAt = call?.startedAt ? new Date(call.startedAt) : null;
@@ -240,6 +324,11 @@ export async function POST(req: NextRequest) {
         ? Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)
         : 0;
 
+    const transferredTo =
+      call?.forwardedPhoneNumber ||
+      call?.destination?.number ||
+      null;
+
     await supabaseAdmin.from("call_logs").insert({
       business_id: business.id,
       vapi_call_id: call?.id,
@@ -248,15 +337,15 @@ export async function POST(req: NextRequest) {
       transcript: transcript || "",
       summary: callSummary || "",
       status: call?.endedReason || "completed",
-      transferred: call?.forwardedPhoneNumber ? true : false,
-      transferred_to: call?.forwardedPhoneNumber || null,
+      transferred: !!transferredTo,
+      transferred_to: transferredTo,
     });
 
     await sendCallSummary(business, {
       caller: call?.customer?.number || "Unknown",
       duration,
       summary: callSummary || "No summary available",
-      transferred: !!call?.forwardedPhoneNumber,
+      transferred: !!transferredTo,
     });
 
     return NextResponse.json({ ok: true });

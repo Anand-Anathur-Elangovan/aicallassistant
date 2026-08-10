@@ -71,6 +71,16 @@ function fmtTime(t: string) {
   return (t || "09:00").toString().slice(0, 5);
 }
 
+function plainSummary(text?: string) {
+  if (!text) return "";
+  return text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("Overview");
@@ -352,7 +362,7 @@ export default function Dashboard() {
                             <span className="font-medium">{c.caller_number || "Unknown"}</span>
                             <span className="text-gray-400 text-sm ml-2">{Math.round((c.duration_seconds || 0) / 60)}m</span>
                             {c.transferred && <span className="ml-2 text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Transferred</span>}
-                            <p className="text-sm text-gray-500 mt-1">{c.summary || "No summary"}</p>
+                            <p className="text-sm text-gray-500 mt-1 whitespace-pre-wrap">{plainSummary(c.summary) || "No summary"}</p>
                           </div>
                           <span className="text-xs text-gray-400">{new Date(c.created_at).toLocaleDateString()}</span>
                         </div>
@@ -663,7 +673,7 @@ export default function Dashboard() {
                         </div>
                         <span className="text-sm text-gray-400">{new Date(c.created_at).toLocaleString()}</span>
                       </div>
-                      {c.summary && <p className="text-sm mb-2"><span className="font-medium">Summary:</span> {c.summary}</p>}
+                      {c.summary && <p className="text-sm mb-2 whitespace-pre-wrap"><span className="font-medium">Summary:</span> {plainSummary(c.summary)}</p>}
                       {c.transcript && (
                         <details className="text-sm">
                           <summary className="cursor-pointer text-blue-600">View Transcript</summary>
