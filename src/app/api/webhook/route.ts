@@ -6,6 +6,7 @@ import {
   callClaude,
   sendCallSummary,
 } from "@/lib/config";
+import { getAvailableSlots, bookAppointment } from "@/lib/scheduling";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -149,6 +150,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         result: `Transferring to ${targetAgent.name}. ${business.transfer_message || "Please hold."}`,
         forwardingPhoneNumber: targetAgent.phone,
+      });
+    }
+
+    // checkAvailability
+    if (fnName === "checkAvailability") {
+      const fromDate =
+        args.from_date || new Date().toISOString().slice(0, 10);
+      const { available, closedNotes } = await getAvailableSlots(
+        business.id,
+        fromDate,
+        14,
+        args.showroom
+      );
+      const closedText = closedNotes.length
+        ? `\nClosed / unavailable dates:\n${closedNotes
+            .map(
+              (c) =>
+                `- ${c.date}: ${c.reason}${c.is_emergency ? " (emergency)" : ""}`
+            )
+            .join("\n")}`
+        : "";
+      const availText = available.length
+        ? available
+            .map(
+              (d) =>
+                `${d.day} ${d.date}: ${d.slots.slice(0, 5).join(", ")}`
+            )
+            .join("\n")
+        : "No open slots in the next 2 weeks.";
+      return NextResponse.json({
+        result: `Available appointment slots:\n${availText}${closedText}\n\nOffer closed dates' reasons to the caller and suggest another available slot.`,
+      });
+    }
+
+    // bookAppointment
+    if (fnName === "bookAppointment") {
+      const result = await bookAppointment({
+        businessId: business.id,
+        customer_name: args.customer_name,
+        customer_phone: args.customer_phone,
+        showroom: args.showroom || "general",
+        scheduled_at: args.scheduled_at,
+        notes: args.notes,
+        source: "ai",
+      });
+      if (result.error) {
+        return NextResponse.json({
+          result: `${result.error} Please use checkAvailability and offer another time.`,
+        });
+      }
+      return NextResponse.json({
+        result: `Appointment booked for ${result.appointment.customer_name} on ${result.appointment.scheduled_at} at ${result.appointment.showroom}. Confirm this with the caller.`,
       });
     }
 

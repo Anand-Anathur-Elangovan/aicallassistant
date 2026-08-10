@@ -1,14 +1,7 @@
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import { supabaseAdmin } from "./supabase-admin";
 
-// ─── Supabase (server) ───
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-export const supabaseAdmin: SupabaseClient = createClient(
-  supabaseUrl || "https://placeholder.supabase.co",
-  supabaseServiceKey || "placeholder"
-);
+export { supabaseAdmin };
 
 // ─── Claude (server-only; never import this file from client components) ───
 function getAnthropic() {
@@ -103,6 +96,12 @@ ${offerList}
 
 BUSINESS HOURS: ${hours}
 
+APPOINTMENTS / SHOWROOM VISITS:
+- If the caller wants to visit a showroom or book an appointment, use checkAvailability then bookAppointment
+- Always collect customer name and phone before booking
+- If a date is closed (leave / emergency), explain the reason from the tool result and offer other available slots
+- Confirm the booked date/time clearly with the caller
+
 ESCALATION RULES:
 - If the caller explicitly asks to speak to a person/human/manager → use transferToAgent immediately
 - If the caller is upset or angry → acknowledge their concern, offer to transfer
@@ -114,6 +113,23 @@ When the caller wants to leave a message or the relevant person is unavailable:
 - Ask for their name, phone number, and a brief message
 - Confirm you'll pass it along
 - Say the team will get back to them as soon as possible`;
+}
+
+export const VOICE_OPTIONS = [
+  { id: "Elliot", label: "Elliot (Male)", provider: "vapi" },
+  { id: "Rohan", label: "Rohan (Male)", provider: "vapi" },
+  { id: "Savannah", label: "Savannah (Female)", provider: "vapi" },
+  { id: "Neha", label: "Neha (Female)", provider: "vapi" },
+  { id: "rachel", label: "Rachel (Female)", provider: "11labs" },
+  { id: "adam", label: "Adam (Male)", provider: "11labs" },
+  { id: "bella", label: "Bella (Female)", provider: "11labs" },
+  { id: "drew", label: "Drew (Male)", provider: "11labs" },
+] as const;
+
+export function resolveVoice(voiceId?: string) {
+  const found = VOICE_OPTIONS.find((v) => v.id === voiceId);
+  if (found) return { provider: found.provider, voiceId: found.id };
+  return { provider: "vapi", voiceId: "Elliot" };
 }
 
 export async function createVapiAssistant(
@@ -213,14 +229,55 @@ export async function createVapiAssistant(
             },
           },
         },
+        {
+          type: "function",
+          function: {
+            name: "checkAvailability",
+            description:
+              "Check available showroom visit appointment slots and any store closures (leave/emergency).",
+            parameters: {
+              type: "object",
+              properties: {
+                from_date: {
+                  type: "string",
+                  description: "Start date YYYY-MM-DD (default today)",
+                },
+                showroom: {
+                  type: "string",
+                  description: "richmond, moorabbin, or general",
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "bookAppointment",
+            description:
+              "Book a showroom visit after confirming availability. Requires customer name and preferred datetime.",
+            parameters: {
+              type: "object",
+              properties: {
+                customer_name: { type: "string" },
+                customer_phone: { type: "string" },
+                showroom: { type: "string" },
+                scheduled_at: {
+                  type: "string",
+                  description: "YYYY-MM-DD HH:MM or ISO datetime",
+                },
+                notes: { type: "string" },
+              },
+              required: ["customer_name", "scheduled_at"],
+            },
+          },
+        },
       ],
     },
-    voice: {
-      provider: "11labs",
-      voiceId: business.voice_id || "rachel",
-    },
+    voice: resolveVoice(business.voice_id),
     firstMessage: `Hello, thank you for calling ${business.name}. How can I help you today?`,
     serverUrl,
+    serverUrlSecret: process.env.VAPI_SERVER_SECRET || undefined,
     endCallPhrases: [
       "goodbye",
       "bye",
