@@ -497,6 +497,70 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  // ─── Danger zone: wipe business data ───
+  if (action === "clear_business_data") {
+    const { business_id, confirm } = payload;
+    if (confirm !== "DELETE") {
+      return NextResponse.json({ error: 'Type DELETE to confirm' }, { status: 400 });
+    }
+    const { data: biz } = await supabaseAdmin
+      .from("businesses")
+      .select("id")
+      .eq("id", business_id)
+      .eq("user_id", user.id)
+      .single();
+    if (!biz) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    const tables = [
+      "transfer_handoffs",
+      "appointments",
+      "store_closures",
+      "store_hours",
+      "call_logs",
+      "offer_rules",
+      "agents",
+      "knowledge_base",
+      "products",
+    ];
+    for (const table of tables) {
+      await supabaseAdmin.from(table).delete().eq("business_id", business_id);
+    }
+    return NextResponse.json({ ok: true, cleared: tables });
+  }
+
+  if (action === "delete_business") {
+    const { business_id, confirm } = payload;
+    if (confirm !== "DELETE") {
+      return NextResponse.json({ error: 'Type DELETE to confirm' }, { status: 400 });
+    }
+    const { data: biz } = await supabaseAdmin
+      .from("businesses")
+      .select("*")
+      .eq("id", business_id)
+      .eq("user_id", user.id)
+      .single();
+    if (!biz) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    if (biz.vapi_assistant_id && process.env.VAPI_API_KEY) {
+      try {
+        await fetch(`https://api.vapi.ai/assistant/${biz.vapi_assistant_id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+        });
+      } catch (e) {
+        console.error("Vapi assistant delete failed:", e);
+      }
+    }
+
+    const { error } = await supabaseAdmin
+      .from("businesses")
+      .delete()
+      .eq("id", business_id)
+      .eq("user_id", user.id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json({ ok: true });
+  }
+
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }
 

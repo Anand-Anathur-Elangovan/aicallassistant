@@ -101,6 +101,8 @@ export default function Dashboard() {
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dark, setDark] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState("");
 
   const [bizForm, setBizForm] = useState({ name: "", description: "", phone: "", language: "en", voice_id: "Elliot", notification_email: "", notification_telegram: "", transfer_message: "Please hold while I connect you to a team member." });
   const [prodForm, setProdForm] = useState({ name: "", description: "", price: "", min_price: "", currency: "AUD", category: "" });
@@ -134,6 +136,17 @@ export default function Dashboard() {
     setHandoffs(Array.isArray(hf) ? hf : []);
     if (r?.totals) setReport(r);
   }, []);
+
+  useEffect(() => {
+    setDark(document.documentElement.classList.contains("dark"));
+  }, []);
+
+  function toggleDark() {
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    localStorage.setItem("theme", next ? "dark" : "light");
+    setDark(next);
+  }
 
   useEffect(() => {
     (async () => {
@@ -301,6 +314,41 @@ export default function Dashboard() {
     if (updated.id) setAppointments(appointments.map(a => a.id === id ? { ...a, status } : a));
   }
 
+  async function clearAllData() {
+    if (!business || deleteConfirm !== "DELETE") {
+      alert('Type DELETE in the box to confirm.');
+      return;
+    }
+    if (!confirm("Clear all products, calls, appointments, knowledge, agents, offers, hours, and handoffs? Business profile stays.")) return;
+    setSaving(true);
+    const res = await api("POST", { action: "clear_business_data", business_id: business.id, confirm: "DELETE" });
+    setSaving(false);
+    if (res.ok) {
+      setDeleteConfirm("");
+      await loadData(business.id);
+      alert("All business data cleared.");
+    } else alert(res.error || "Failed to clear data");
+  }
+
+  async function deleteBusiness() {
+    if (!business || deleteConfirm !== "DELETE") {
+      alert('Type DELETE in the box to confirm.');
+      return;
+    }
+    if (!confirm("Permanently delete this business and ALL related data? This cannot be undone.")) return;
+    setSaving(true);
+    const res = await api("POST", { action: "delete_business", business_id: business.id, confirm: "DELETE" });
+    setSaving(false);
+    if (res.ok) {
+      setBusiness(null);
+      setProducts([]); setKnowledge([]); setCalls([]); setAgents([]); setOffers([]);
+      setAppointments([]); setHours([]); setClosures([]); setHandoffs([]); setReport(null);
+      setDeleteConfirm("");
+      alert("Business deleted.");
+      setTab("Assistant");
+    } else alert(res.error || "Failed to delete");
+  }
+
   async function logout() {
     await supabase.auth.signOut();
     router.push("/");
@@ -316,6 +364,15 @@ export default function Dashboard() {
       <header className="border-b px-6 py-4 flex items-center justify-between">
         <h1 className="text-xl font-bold">AI Receptionist</h1>
         <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={toggleDark}
+            className="text-sm px-3 py-1.5 border rounded-lg hover:bg-gray-50"
+            aria-label="Toggle dark mode"
+            title={dark ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {dark ? "Light" : "Dark"}
+          </button>
           <span className="text-sm text-gray-500">{business?.name || "No business"}</span>
           {business?.vapi_assistant_id && <span className="text-xs px-2 py-1 bg-green-100 text-green-700 rounded-full">Live</span>}
           <button onClick={logout} className="text-sm text-red-500 hover:underline">Logout</button>
@@ -802,6 +859,36 @@ export default function Dashboard() {
                   <h3 className="font-medium">Webhook URL</h3>
                   <code className="block p-3 bg-gray-50 rounded-lg text-sm break-all">https://aicallassistant.vercel.app/api/webhook</code>
                   <p className="text-sm text-gray-500">Voice/gender: change under <strong>Assistant</strong> tab, then click Update Business & Voice.</p>
+
+                  <hr className="my-6" />
+                  <h3 className="font-medium text-red-600">Danger Zone</h3>
+                  <p className="text-sm text-gray-500">
+                    Type <strong>DELETE</strong> below to enable destructive actions.
+                  </p>
+                  <input
+                    value={deleteConfirm}
+                    onChange={e => setDeleteConfirm(e.target.value)}
+                    className="w-full px-4 py-2 border rounded-lg border-red-200"
+                    placeholder='Type DELETE to confirm'
+                  />
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={clearAllData}
+                      disabled={saving || deleteConfirm !== "DELETE"}
+                      className="px-4 py-2 border border-red-300 text-red-600 rounded-lg disabled:opacity-40 text-left"
+                    >
+                      Clear all data (keep business profile)
+                    </button>
+                    <p className="text-xs text-gray-400">Removes products, knowledge, calls, appointments, agents, offers, hours, closures, handoffs.</p>
+                    <button
+                      onClick={deleteBusiness}
+                      disabled={saving || deleteConfirm !== "DELETE"}
+                      className="px-4 py-2 bg-red-600 text-white rounded-lg disabled:opacity-40"
+                    >
+                      Delete entire business
+                    </button>
+                    <p className="text-xs text-gray-400">Deletes business + all data and removes the Vapi assistant if linked.</p>
+                  </div>
                 </div>
               )}
             </div>
