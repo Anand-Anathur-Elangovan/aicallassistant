@@ -147,6 +147,10 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      const agentPhone = targetAgent.phone;
+      const spokenNumber = agentPhone.replace(/^\+/, "plus ");
+      const numberFallback = `I wasn't able to connect you automatically. You can call ${targetAgent.name} directly on ${agentPhone}. Would you like me to repeat that number slowly so you can note it down?`;
+
       const controlUrl =
         call?.monitor?.controlUrl ||
         message?.call?.monitor?.controlUrl ||
@@ -174,7 +178,7 @@ export async function POST(req: NextRequest) {
               type: "transfer",
               destination: {
                 type: "number",
-                number: targetAgent.phone,
+                number: agentPhone,
                 transferPlan: {
                   mode: "warm-transfer-say-summary",
                   message: handoffNote,
@@ -195,7 +199,7 @@ export async function POST(req: NextRequest) {
                 type: "transfer",
                 destination: {
                   type: "number",
-                  number: targetAgent.phone,
+                  number: agentPhone,
                 },
                 content: holdMessage,
               }),
@@ -204,27 +208,25 @@ export async function POST(req: NextRequest) {
               const coldErr = await coldRes.text();
               console.error("Cold transfer failed:", coldRes.status, coldErr);
               return NextResponse.json({
-                result:
-                  "I wasn't able to connect you right now. Transfers from this line may not support that destination yet. I can take your name and number for a callback, or share the showroom phone numbers.",
+                result: `${numberFallback} The number again is ${spokenNumber}. If they ask you to confirm, read it digit by digit and ask them to repeat it back.`,
               });
             }
           }
 
           return NextResponse.json({
-            result: `Connecting you to ${targetAgent.name} at ${targetAgent.phone} now. ${holdMessage}`,
+            result: `Connecting you to ${targetAgent.name} at ${agentPhone} now. ${holdMessage}`,
           });
         } catch (err) {
           console.error("Transfer error:", err);
           return NextResponse.json({
-            result:
-              "There was a technical issue transferring the call. I can take a message with your name and number instead.",
+            result: `${numberFallback} The number is ${spokenNumber}. Offer to repeat it slowly and confirm digit by digit if they ask.`,
           });
         }
       }
 
-      // No control URL — ask assistant to give the number (cannot bridge without control API)
+      // No control URL — give the direct number
       return NextResponse.json({
-        result: `I can't bridge the call from this session, but you can reach ${targetAgent.name} on ${targetAgent.phone}. Would you like me to take a callback message instead?`,
+        result: `${numberFallback} The number is ${spokenNumber}. Offer to repeat it slowly and confirm digit by digit if they ask.`,
       });
     }
 
