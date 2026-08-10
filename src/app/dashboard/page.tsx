@@ -30,6 +30,10 @@ type StoreHour = {
   max_appointments: number; slot_minutes: number;
 };
 type Closure = { id: string; start_date: string; end_date: string; reason: string; is_emergency: boolean };
+type Handoff = {
+  id: string; caller_number: string; agent_name: string; agent_phone: string;
+  department: string; reason: string; context_summary: string; status: string; created_at: string;
+};
 type Report = {
   totals: {
     calls: number; callsThisWeek: number; totalDurationMinutes: number; avgDurationSeconds: number;
@@ -40,7 +44,7 @@ type Report = {
   upcomingAppointments: Appointment[];
 };
 
-const TABS = ["Overview", "Reports", "Assistant", "Products", "Knowledge", "Appointments", "Hours", "Calls", "Agents", "Offers", "Settings"] as const;
+const TABS = ["Overview", "Reports", "Assistant", "Products", "Knowledge", "Appointments", "Hours", "Calls", "Transfers", "Agents", "Offers", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const VOICES = [
@@ -93,6 +97,7 @@ export default function Dashboard() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [hours, setHours] = useState<StoreHour[]>([]);
   const [closures, setClosures] = useState<Closure[]>([]);
+  const [handoffs, setHandoffs] = useState<Handoff[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -106,7 +111,7 @@ export default function Dashboard() {
   const [closureForm, setClosureForm] = useState({ start_date: "", end_date: "", reason: "", is_emergency: false });
 
   const loadData = useCallback(async (bizId: string) => {
-    const [p, k, c, a, o, ap, h, cl, r] = await Promise.all([
+    const [p, k, c, a, o, ap, h, cl, r, hf] = await Promise.all([
       api("GET", undefined, { resource: "products", business_id: bizId }),
       api("GET", undefined, { resource: "knowledge", business_id: bizId }),
       api("GET", undefined, { resource: "calls", business_id: bizId }),
@@ -116,6 +121,7 @@ export default function Dashboard() {
       api("GET", undefined, { resource: "hours", business_id: bizId }),
       api("GET", undefined, { resource: "closures", business_id: bizId }),
       api("GET", undefined, { resource: "reports", business_id: bizId }),
+      api("GET", undefined, { resource: "handoffs", business_id: bizId }),
     ]);
     setProducts(Array.isArray(p) ? p : []);
     setKnowledge(Array.isArray(k) ? k : []);
@@ -125,6 +131,7 @@ export default function Dashboard() {
     setAppointments(Array.isArray(ap) ? ap : []);
     setHours(Array.isArray(h) ? h : []);
     setClosures(Array.isArray(cl) ? cl : []);
+    setHandoffs(Array.isArray(hf) ? hf : []);
     if (r?.totals) setReport(r);
   }, []);
 
@@ -462,10 +469,16 @@ export default function Dashboard() {
                   <div>
                     <label className="block text-sm font-medium mb-1">Language</label>
                     <select value={bizForm.language} onChange={e => setBizForm({ ...bizForm, language: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
+                      <option value="auto">Auto-detect</option>
                       <option value="en">English</option>
+                      <option value="it">Italian</option>
                       <option value="ta">Tamil</option>
                       <option value="hi">Hindi</option>
+                      <option value="fr">French</option>
+                      <option value="es">Spanish</option>
+                      <option value="de">German</option>
                     </select>
+                    <p className="text-xs text-gray-400 mt-1">Auto-detect uses multilingual speech recognition.</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">Voice / Gender</label>
@@ -682,6 +695,45 @@ export default function Dashboard() {
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "Transfers" && (
+            <div>
+              <h2 className="text-2xl font-bold mb-2">Transfer Handoffs</h2>
+              <p className="text-gray-500 text-sm mb-6">
+                When a caller asks for a human, each attempt is logged with caller ID, time, destination, and reason — so staff have context even if the bridge fails.
+              </p>
+              {!business ? <p className="text-gray-400">Set up business first.</p> : (
+                <div className="space-y-3">
+                  {handoffs.map(h => (
+                    <div key={h.id} className="p-4 border rounded-xl">
+                      <div className="flex flex-wrap justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium">{h.caller_number || "Unknown caller"}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            h.status === "connected" ? "bg-green-100 text-green-700" :
+                            h.status === "number_given" ? "bg-amber-100 text-amber-800" :
+                            h.status === "failed" ? "bg-red-100 text-red-700" :
+                            "bg-gray-100 text-gray-600"
+                          }`}>{h.status}</span>
+                        </div>
+                        <span className="text-sm text-gray-400">{new Date(h.created_at).toLocaleString()}</span>
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        → {h.agent_name} ({h.agent_phone})
+                        {h.department ? ` · ${h.department}` : ""}
+                      </p>
+                      {(h.reason || h.context_summary) && (
+                        <p className="text-sm text-gray-500 mt-1">{h.context_summary || h.reason}</p>
+                      )}
+                    </div>
+                  ))}
+                  {!handoffs.length && (
+                    <p className="text-gray-400">No transfer attempts yet. Ask the AI to connect to a human on a test call.</p>
+                  )}
                 </div>
               )}
             </div>

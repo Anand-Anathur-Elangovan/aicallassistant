@@ -150,6 +150,39 @@ export async function POST(req: NextRequest) {
       const agentPhone = targetAgent.phone;
       const spokenNumber = agentPhone.replace(/^\+/, "plus ");
       const numberFallback = `I wasn't able to connect you automatically. You can call ${targetAgent.name} directly on ${agentPhone}. Would you like me to repeat that number slowly so you can note it down?`;
+      const callerNumber =
+        call?.customer?.number ||
+        message?.call?.customer?.number ||
+        body?.call?.customer?.number ||
+        "Unknown";
+      const vapiCallId = call?.id || message?.call?.id || body?.call?.id || null;
+      const contextSummary = [
+        args.reason ? `Reason: ${args.reason}` : null,
+        args.department ? `Dept: ${args.department}` : null,
+        args.urgent ? "URGENT" : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+      async function logHandoff(status: "attempted" | "connected" | "failed" | "number_given") {
+        try {
+          await supabaseAdmin.from("transfer_handoffs").insert({
+            business_id: business.id,
+            vapi_call_id: vapiCallId,
+            caller_number: callerNumber,
+            agent_name: targetAgent.name,
+            agent_phone: agentPhone,
+            department: args.department || targetAgent.department || null,
+            reason: args.reason || null,
+            context_summary: contextSummary || null,
+            status,
+          });
+        } catch (e) {
+          console.error("Failed to log handoff:", e);
+        }
+      }
+
+      await logHandoff("attempted");
 
       const controlUrl =
         call?.monitor?.controlUrl ||
@@ -164,7 +197,7 @@ export async function POST(req: NextRequest) {
       const handoffNote = [
         args.reason ? `Reason: ${args.reason}` : null,
         args.department ? `Department: ${args.department}` : null,
-        `Caller requested transfer to ${targetAgent.name}.`,
+        `Caller ${callerNumber} requested transfer to ${targetAgent.name}.`,
       ]
         .filter(Boolean)
         .join(" ");
@@ -207,17 +240,20 @@ export async function POST(req: NextRequest) {
             if (!coldRes.ok) {
               const coldErr = await coldRes.text();
               console.error("Cold transfer failed:", coldRes.status, coldErr);
+              await logHandoff("number_given");
               return NextResponse.json({
                 result: `${numberFallback} The number again is ${spokenNumber}. If they ask you to confirm, read it digit by digit and ask them to repeat it back.`,
               });
             }
           }
 
+          await logHandoff("connected");
           return NextResponse.json({
             result: `Connecting you to ${targetAgent.name} at ${agentPhone} now. ${holdMessage}`,
           });
         } catch (err) {
           console.error("Transfer error:", err);
+          await logHandoff("number_given");
           return NextResponse.json({
             result: `${numberFallback} The number is ${spokenNumber}. Offer to repeat it slowly and confirm digit by digit if they ask.`,
           });
@@ -225,6 +261,7 @@ export async function POST(req: NextRequest) {
       }
 
       // No control URL — give the direct number
+      await logHandoff("number_given");
       return NextResponse.json({
         result: `${numberFallback} The number is ${spokenNumber}. Offer to repeat it slowly and confirm digit by digit if they ask.`,
       });

@@ -82,7 +82,11 @@ ${business.description || ""}
 
 CORE RULES:
 - Always be polite, professional, and conversational — sound like a real human receptionist
-- Speak in the caller's language. Default: ${business.language || "English"}
+- Speak in the caller's language. Default: ${
+    business.language === "multi" || business.language === "auto"
+      ? "Auto-detect from the caller (English, Italian, Tamil, Hindi, etc.)"
+      : business.language || "English"
+  }
 - NEVER make up product details or prices — always use the checkProduct or searchKnowledge tools first
 - NEVER quote a price below the minimum price (min_price) for any product
 - If the caller wants to negotiate, check available offers using the checkOffers tool
@@ -136,6 +140,21 @@ export function resolveVoice(voiceId?: string) {
   const found = VOICE_OPTIONS.find((v) => v.id === voiceId);
   if (found) return { provider: found.provider, voiceId: found.id };
   return { provider: "vapi", voiceId: "Elliot" };
+}
+
+/** Map app language setting to Deepgram/Vapi transcriber language */
+export function resolveTranscriberLanguage(lang?: string) {
+  if (!lang || lang === "auto" || lang === "multi") return "multi";
+  const map: Record<string, string> = {
+    en: "en",
+    it: "it",
+    ta: "ta",
+    hi: "hi",
+    fr: "fr",
+    es: "es",
+    de: "de",
+  };
+  return map[lang] || "en";
 }
 
 export async function createVapiAssistant(
@@ -294,7 +313,7 @@ export async function createVapiAssistant(
     transcriber: {
       provider: "deepgram",
       model: "nova-2",
-      language: business.language || "en",
+      language: resolveTranscriberLanguage(business.language),
     },
   });
 }

@@ -6,6 +6,7 @@ import {
   generateEmbedding,
   buildSystemPrompt,
   resolveVoice,
+  resolveTranscriberLanguage,
 } from "@/lib/config";
 import { createClient } from "@supabase/supabase-js";
 import { ensureDefaultStoreHours } from "@/lib/scheduling";
@@ -61,6 +62,7 @@ export async function GET(req: NextRequest) {
     appointments: "appointments",
     hours: "store_hours",
     closures: "store_closures",
+    handoffs: "transfer_handoffs",
   };
 
   if (resource === "reports") {
@@ -130,6 +132,8 @@ export async function GET(req: NextRequest) {
     query = query.order("day_of_week", { ascending: true });
   } else if (resource === "appointments") {
     query = query.order("scheduled_at", { ascending: false });
+  } else if (resource === "handoffs") {
+    query = query.order("created_at", { ascending: false });
   } else {
     query = query.order("created_at", { ascending: false });
   }
@@ -206,6 +210,13 @@ export async function POST(req: NextRequest) {
           (updates.voice_id as string) || merged.voice_id
         ),
         firstMessage: `Hello, thank you for calling ${merged.name}. How can I help you today?`,
+        transcriber: {
+          provider: "deepgram",
+          model: "nova-2",
+          language: resolveTranscriberLanguage(
+            (updates.language as string) || merged.language
+          ),
+        },
       });
     }
 
