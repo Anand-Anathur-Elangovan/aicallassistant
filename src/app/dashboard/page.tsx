@@ -418,7 +418,7 @@ export default function Dashboard() {
                         {(report?.recentCalls || calls).slice(0, 8).map(c => (
                           <div key={c.id} className="p-3 border rounded-lg text-sm">
                             <div className="flex justify-between"><span className="font-medium">{c.caller_number}</span><span className="text-gray-400">{new Date(c.created_at).toLocaleString()}</span></div>
-                            <p className="text-gray-500 mt-1">{c.summary || "No summary"}</p>
+                            <p className="text-gray-500 mt-1 whitespace-pre-wrap">{plainSummary(c.summary) || "No summary"}</p>
                           </div>
                         ))}
                         {!calls.length && <p className="text-gray-400">No call reports yet.</p>}
