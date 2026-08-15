@@ -16,6 +16,7 @@ import {
   extractVapiSettings,
   compareVapiWithAppFull,
 } from "@/lib/vapi-sync";
+import { backfillCallLogs } from "@/lib/vapi-call";
 
 async function loadBusinessCatalog(businessId: string, userId: string) {
   const { data: biz } = await supabaseAdmin
@@ -139,12 +140,12 @@ export async function GET(req: NextRequest) {
       .eq("business_id", businessId)
       .order("created_at", { ascending: false });
 
-    const allCalls = calls || [];
+    const allCalls = await backfillCallLogs(calls || []);
     const allAppts = appointments || [];
     const allLeads = leads || [];
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 86400000);
-    const callsWeek = allCalls.filter((c) => new Date(c.created_at) >= weekAgo);
+    const callsWeek = allCalls.filter((c) => new Date(c.created_at || 0) >= weekAgo);
     const totalDuration = allCalls.reduce((s, c) => s + (c.duration_seconds || 0), 0);
     const transferred = allCalls.filter((c) => c.transferred).length;
     const maxDurationHits = allCalls.filter(
@@ -157,9 +158,9 @@ export async function GET(req: NextRequest) {
     const byHour: Record<number, number> = {};
     const byIntent: Record<string, number> = {};
     for (const c of callsWeek) {
-      const d = c.created_at.slice(0, 10);
+      const d = (c.created_at || "").slice(0, 10);
       byDay[d] = (byDay[d] || 0) + 1;
-      const hour = new Date(c.created_at).getHours();
+      const hour = new Date(c.created_at || 0).getHours();
       byHour[hour] = (byHour[hour] || 0) + 1;
     }
     for (const c of allCalls) {
@@ -224,7 +225,13 @@ export async function GET(req: NextRequest) {
   }
 
   const { data } = await query;
-  return NextResponse.json(data || []);
+  let rows = data || [];
+
+  if (resource === "calls") {
+    rows = await backfillCallLogs(rows);
+  }
+
+  return NextResponse.json(rows);
 }
 
 export async function POST(req: NextRequest) {

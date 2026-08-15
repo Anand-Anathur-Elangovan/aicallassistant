@@ -37,6 +37,18 @@ export function plainSummary(text?: string) {
     .trim();
 }
 
+export function displaySummary(text?: string) {
+  if (!text) return "";
+  const lower = text.toLowerCase();
+  const bogus =
+    lower.includes("i'm ready to summarize") ||
+    lower.includes("please share the full transcript") ||
+    lower.includes("i don't see a complete call transcript") ||
+    lower.includes("you've only provided the opening greeting");
+  if (bogus) return "";
+  return plainSummary(text);
+}
+
 export function fmtDuration(seconds?: number) {
   const s = seconds || 0;
   const m = Math.floor(s / 60);

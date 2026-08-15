@@ -12,6 +12,7 @@ import { getStaffAvailability } from "@/lib/store-status";
 import { classifyCallIntent } from "@/lib/call-intent";
 import { formatProductForSpeech } from "@/lib/product-speech";
 import { extractRecordingUrl, computeCallScore } from "@/lib/call-utils";
+import { isBogusSummary, parseEndOfCallReport } from "@/lib/vapi-call";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -376,10 +377,8 @@ export async function POST(req: NextRequest) {
 
   // ─── End of Call Report ───
   if (messageType === "end-of-call-report") {
-    const call = message?.call || body.call;
-    const transcript = message?.transcript || body.transcript;
-    const summary = message?.summary || body.summary;
-    const assistantId = call?.assistantId;
+    const parsed = parseEndOfCallReport(body);
+    const { call, message: reportMessage, transcript, summary: vapiSummary, callerNumber, durationSeconds, assistantId } = parsed;
 
     const { data: business } = await supabaseAdmin
       .from("businesses")
@@ -391,12 +390,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    let callSummary = summary;
-    if (!callSummary && transcript) {
+    let callSummary = vapiSummary;
+    const hasUsableTranscript = transcript.trim().length >= 80;
+    if (!callSummary && hasUsableTranscript) {
       callSummary = await callClaude(
-        "You summarize phone call transcripts in plain text only. No markdown, no # headers, no **bold**. Use short labeled lines like: Request: ... Outcome: ... Action items: ... Transferred: yes/no.",
+        "You summarize phone call transcripts in plain text only. No markdown, no # headers, no **bold**. Use short labeled lines like: Request: ... Outcome: ... Action items: ... Transferred: yes/no. Only summarize what is in the transcript.",
         `Summarize this call transcript:\n\n${transcript}`
       );
+    } else if (!callSummary && transcript.trim()) {
+      callSummary = transcript.slice(0, 500);
+    }
+    if (callSummary && isBogusSummary(callSummary)) {
+      callSummary = hasUsableTranscript ? transcript.slice(0, 500) : "";
     }
     // Strip markdown if model still returns it
     if (callSummary) {
@@ -408,16 +413,18 @@ export async function POST(req: NextRequest) {
         .trim();
     }
 
-    const startedAt = call?.startedAt ? new Date(call.startedAt) : null;
-    const endedAt = call?.endedAt ? new Date(call.endedAt) : null;
+    const startedAt = call?.startedAt ? new Date(String(call.startedAt)) : null;
+    const endedAt = call?.endedAt ? new Date(String(call.endedAt)) : null;
     const duration =
-      startedAt && endedAt
-        ? Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)
-        : 0;
+      durationSeconds > 0
+        ? durationSeconds
+        : startedAt && endedAt
+          ? Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)
+          : 0;
 
     const transferredTo =
       call?.forwardedPhoneNumber ||
-      call?.destination?.number ||
+      (call?.destination as { number?: string } | undefined)?.number ||
       null;
 
     const intent = await classifyCallIntent(
@@ -425,19 +432,25 @@ export async function POST(req: NextRequest) {
       transcript || ""
     );
 
+    const endedReason = String(call?.endedReason || reportMessage?.endedReason || "completed");
     const hitMaxDuration =
       duration >= MAX_CALL_DURATION_SECONDS - 15 ||
-      call?.endedReason === "max-duration-exceeded";
+      endedReason === "max-duration-exceeded";
 
-    const recordingUrl = extractRecordingUrl({ message, artifact: message?.artifact, call });
+    const recordingUrl = extractRecordingUrl({
+      message: reportMessage as Record<string, unknown>,
+      artifact: reportMessage?.artifact as Record<string, unknown> | undefined,
+      call: call as Record<string, unknown>,
+    });
+    const callStatus = hitMaxDuration ? "max_duration" : endedReason;
     const callRecord = {
       business_id: business.id,
       vapi_call_id: call?.id,
-      caller_number: call?.customer?.number || "Unknown",
+      caller_number: callerNumber,
       duration_seconds: duration,
       transcript: transcript || "",
       summary: callSummary || "",
-      status: hitMaxDuration ? "max_duration" : call?.endedReason || "completed",
+      status: callStatus,
       transferred: !!transferredTo,
       transferred_to: transferredTo,
       intent,
@@ -448,14 +461,14 @@ export async function POST(req: NextRequest) {
         transcript: transcript || "",
         intent,
         transferred: !!transferredTo,
-        status: hitMaxDuration ? "max_duration" : call?.endedReason || "completed",
+        status: callStatus,
       }),
     };
 
     await supabaseAdmin.from("call_logs").insert(callRecord);
 
     await sendCallSummary(business, {
-      caller: call?.customer?.number || "Unknown",
+      caller: callerNumber,
       duration,
       summary: callSummary || "No summary available",
       transferred: !!transferredTo,
