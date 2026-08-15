@@ -11,6 +11,7 @@ import { getAvailableSlots, bookAppointment } from "@/lib/scheduling";
 import { getStaffAvailability } from "@/lib/store-status";
 import { classifyCallIntent } from "@/lib/call-intent";
 import { formatProductForSpeech } from "@/lib/product-speech";
+import { extractRecordingUrl, computeCallScore } from "@/lib/call-utils";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -428,7 +429,8 @@ export async function POST(req: NextRequest) {
       duration >= MAX_CALL_DURATION_SECONDS - 15 ||
       call?.endedReason === "max-duration-exceeded";
 
-    await supabaseAdmin.from("call_logs").insert({
+    const recordingUrl = extractRecordingUrl({ message, artifact: message?.artifact, call });
+    const callRecord = {
       business_id: business.id,
       vapi_call_id: call?.id,
       caller_number: call?.customer?.number || "Unknown",
@@ -439,7 +441,18 @@ export async function POST(req: NextRequest) {
       transferred: !!transferredTo,
       transferred_to: transferredTo,
       intent,
-    });
+      recording_url: recordingUrl,
+      call_score: computeCallScore({
+        duration_seconds: duration,
+        summary: callSummary || "",
+        transcript: transcript || "",
+        intent,
+        transferred: !!transferredTo,
+        status: hitMaxDuration ? "max_duration" : call?.endedReason || "completed",
+      }),
+    };
+
+    await supabaseAdmin.from("call_logs").insert(callRecord);
 
     await sendCallSummary(business, {
       caller: call?.customer?.number || "Unknown",

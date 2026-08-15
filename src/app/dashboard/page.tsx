@@ -4,6 +4,9 @@ import { supabase } from "@/lib/supabase";
 import { SiteHeader } from "@/components/SiteHeader";
 import { VAPI_VOICES, ELEVENLABS_VOICES } from "@/lib/voices";
 import { useRouter } from "next/navigation";
+import { CallDrawer } from "@/components/dashboard/CallDrawer";
+import { CallsPanel } from "@/components/dashboard/CallsPanel";
+import { CallFilters, filterLeads } from "@/lib/call-utils";
 
 type Business = {
   id: string;
@@ -26,10 +29,14 @@ type Business = {
 };
 type Product = { id: string; name: string; description: string; price: number; min_price: number; currency: string; category: string; in_stock: boolean };
 type KnowledgeItem = { id: string; title: string; content: string; created_at: string };
-type CallLog = { id: string; caller_number: string; duration_seconds: number; summary: string; transcript: string; status: string; transferred: boolean; intent?: string; created_at: string };
+type CallLog = {
+  id: string; caller_number: string; duration_seconds: number; summary: string; transcript: string;
+  status: string; transferred: boolean; intent?: string; created_at: string;
+  vapi_call_id?: string | null; recording_url?: string | null; call_score?: number | null;
+};
 type Lead = {
   id: string; name: string; phone: string; email: string; interest: string; message: string;
-  source: string; status: string; caller_number: string; created_at: string;
+  source: string; status: string; caller_number: string; created_at: string; vapi_call_id?: string | null;
 };
 type Agent = { id: string; name: string; phone: string; department: string; is_available: boolean };
 type OfferRule = { id: string; condition: string; discount_percent: number; description: string; is_active: boolean };
@@ -81,16 +88,6 @@ function fmtTime(t: string) {
   return (t || "09:00").toString().slice(0, 5);
 }
 
-function plainSummary(text?: string) {
-  if (!text) return "";
-  return text
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/\*([^*]+)\*/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .trim();
-}
-
 const INTENT_STYLES: Record<string, string> = {
   sales: "bg-green-100 text-green-800",
   support: "bg-blue-100 text-blue-800",
@@ -127,6 +124,9 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false);
   const [dark, setDark] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
+  const [selectedCall, setSelectedCall] = useState<CallLog | null>(null);
+  const [callFilters, setCallFilters] = useState<CallFilters>({ search: "", dateFrom: "", dateTo: "", intent: "all" });
+  const [leadSearch, setLeadSearch] = useState("");
 
   const [bizForm, setBizForm] = useState({
     name: "", description: "", phone: "", language: "en", voice_id: "Elliot",
@@ -476,9 +476,10 @@ export default function Dashboard() {
   const totals = report?.totals;
   const maxDay = Math.max(1, ...(report?.callsByDay?.map(d => d.count) || [1]));
   const maxHour = Math.max(1, ...(report?.callsByHour?.map(d => d.count) || [1]));
+  const filteredLeads = filterLeads(leads, leadSearch);
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex flex-col h-screen overflow-hidden">
       <SiteHeader
         darkToggle
         dark={dark}
@@ -492,8 +493,8 @@ export default function Dashboard() {
         }
       />
 
-      <div className="flex-1 flex">
-        <nav className="w-48 border-r p-4 space-y-1 overflow-auto">
+      <div className="flex-1 flex min-h-0">
+        <nav className="w-48 border-r p-4 space-y-1 overflow-y-auto shrink-0">
           {TABS.map(t => (
             <button key={t} onClick={() => setTab(t)} className={`w-full text-left px-3 py-2 rounded-lg text-sm ${tab === t ? "bg-blue-50 text-blue-700 font-medium" : "hover:bg-gray-50"}`}>
               {t}
@@ -501,10 +502,11 @@ export default function Dashboard() {
           ))}
         </nav>
 
-        <main className="flex-1 p-6 overflow-auto">
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-6">
           {tab === "Overview" && (
-            <div>
-              <h2 className="text-2xl font-bold mb-6">Overview</h2>
+            <div className="max-w-5xl">
+              <h2 className="text-2xl font-bold mb-4">Overview</h2>
               {!business ? (
                 <div className="p-8 border rounded-xl text-center">
                   <h3 className="text-lg font-medium mb-2">Welcome! Set up your business first.</h3>
@@ -512,7 +514,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
                     {[
                       { label: "Total Calls", value: totals?.calls ?? calls.length },
                       { label: "This Week", value: totals?.callsThisWeek ?? 0 },
@@ -525,138 +527,136 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
-                  <div className="flex gap-3 mb-6">
+                  <div className="flex flex-wrap gap-3 mb-6">
                     <button onClick={() => setTab("Reports")} className="px-4 py-2 border rounded-lg text-sm">Full Reports</button>
                     <button onClick={() => setTab("Leads")} className="px-4 py-2 border rounded-lg text-sm">Leads</button>
                     <button onClick={() => setTab("Appointments")} className="px-4 py-2 border rounded-lg text-sm">Appointments</button>
-                    <button onClick={() => setTab("Hours")} className="px-4 py-2 border rounded-lg text-sm">Hours & Closures</button>
                   </div>
                   <h3 className="font-medium mb-3">Recent Calls</h3>
-                  {calls.length === 0 ? <p className="text-gray-400">No calls logged yet. After webhook is live, summaries appear here.</p> : (
-                    <div className="space-y-2">
-                      {calls.slice(0, 5).map(c => (
-                        <div key={c.id} className="p-3 border rounded-lg flex justify-between items-start">
-                          <div>
-                            <span className="font-medium">{c.caller_number || "Unknown"}</span>
-                            <span className="text-gray-400 text-sm ml-2">{Math.round((c.duration_seconds || 0) / 60)}m</span>
-                            <IntentBadge intent={c.intent} />
-                            {c.transferred && <span className="ml-2 text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Transferred</span>}
-                            <p className="text-sm text-gray-500 mt-1 whitespace-pre-wrap">{plainSummary(c.summary) || "No summary"}</p>
-                          </div>
-                          <span className="text-xs text-gray-400">{new Date(c.created_at).toLocaleDateString()}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <CallsPanel
+                    calls={calls}
+                    filters={callFilters}
+                    onFiltersChange={setCallFilters}
+                    onSelectCall={(c) => setSelectedCall(c as CallLog)}
+                    selectedId={selectedCall?.id}
+                    limit={8}
+                  />
                 </>
               )}
             </div>
           )}
 
           {tab === "Reports" && (
-            <div>
+            <div className="max-w-5xl">
               <h2 className="text-2xl font-bold mb-2">Call Analytics</h2>
-              <p className="text-gray-500 text-sm mb-6">Usage, intents, peak hours, and outcomes. Max call length: 8 minutes.</p>
+              <p className="text-gray-500 text-sm mb-4">Usage, intents, peak hours, and outcomes. Max call length: 8 minutes.</p>
               {!business ? <p className="text-gray-400">Set up business first.</p> : (
                 <>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
                     {[
                       { label: "All Calls", value: totals?.calls ?? 0 },
                       { label: "Talk Time", value: `${totals?.totalDurationMinutes ?? 0}m` },
                       { label: "Avg Call", value: `${totals?.avgDurationSeconds ?? 0}s` },
                       { label: "Transfer Rate", value: `${totals?.transferRate ?? 0}%` },
                       { label: "Calls (7d)", value: totals?.callsThisWeek ?? 0 },
-                      { label: "All Appointments", value: totals?.appointmentsTotal ?? 0 },
-                      { label: "Upcoming Visits", value: totals?.upcomingAppointments ?? 0 },
                       { label: "Total Leads", value: totals?.leadsTotal ?? leads.length },
                       { label: "New Leads", value: totals?.newLeads ?? 0 },
                       { label: "8min Cap Hits", value: totals?.maxDurationHits ?? 0 },
-                      { label: "Products", value: products.length },
                     ].map(s => (
-                      <div key={s.label} className="p-4 border rounded-xl">
-                        <div className="text-sm text-gray-500">{s.label}</div>
-                        <div className="text-xl font-bold mt-1">{s.value}</div>
+                      <div key={s.label} className="p-3 border rounded-xl">
+                        <div className="text-xs text-gray-500">{s.label}</div>
+                        <div className="text-lg font-bold mt-1">{s.value}</div>
                       </div>
                     ))}
                   </div>
 
-                  <h3 className="font-medium mb-3">Calls last 7 days</h3>
-                  {(!report?.callsByDay?.length) ? <p className="text-gray-400 mb-8">No calls in the last week yet.</p> : (
-                    <div className="flex items-end gap-2 h-40 mb-8 border rounded-xl p-4">
-                      {report.callsByDay.map(d => (
-                        <div key={d.date} className="flex-1 flex flex-col items-center justify-end h-full">
-                          <div className="w-full bg-blue-500 rounded-t" style={{ height: `${(d.count / maxDay) * 100}%`, minHeight: d.count ? 8 : 0 }} />
-                          <span className="text-[10px] text-gray-400 mt-1">{d.date.slice(5)}</span>
-                          <span className="text-xs font-medium">{d.count}</span>
+                  <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                      <h3 className="font-medium mb-2 text-sm">Calls last 7 days</h3>
+                      {(!report?.callsByDay?.length) ? <p className="text-gray-400 text-sm">No calls in the last week yet.</p> : (
+                        <div className="flex items-end gap-2 h-28 border rounded-xl p-3">
+                          {report.callsByDay.map(d => (
+                            <div key={d.date} className="flex-1 flex flex-col items-center justify-end h-full">
+                              <div className="w-full bg-blue-500 rounded-t" style={{ height: `${(d.count / maxDay) * 100}%`, minHeight: d.count ? 8 : 0 }} />
+                              <span className="text-[10px] text-gray-400 mt-1">{d.date.slice(5)}</span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  )}
-
-                  {!!report?.intentBreakdown?.length && (
-                    <>
-                      <h3 className="font-medium mb-3">Call intents</h3>
-                      <div className="flex flex-wrap gap-3 mb-8">
-                        {report.intentBreakdown.map(i => (
-                          <div key={i.intent} className="px-4 py-3 border rounded-xl flex items-center gap-3">
-                            <IntentBadge intent={i.intent} />
-                            <span className="text-xl font-bold">{i.count}</span>
-                          </div>
-                        ))}
+                    {!!report?.intentBreakdown?.length && (
+                      <div>
+                        <h3 className="font-medium mb-2 text-sm">Call intents</h3>
+                        <div className="flex flex-wrap gap-2">
+                          {report.intentBreakdown.map(i => (
+                            <div key={i.intent} className="px-3 py-2 border rounded-lg flex items-center gap-2 text-sm">
+                              <IntentBadge intent={i.intent} />
+                              <span className="font-bold">{i.count}</span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    </>
-                  )}
+                    )}
+                  </div>
 
                   {!!report?.callsByHour?.length && (
-                    <>
-                      <h3 className="font-medium mb-3">Peak hours (last 7 days)</h3>
-                      <div className="flex items-end gap-1 h-32 mb-8 border rounded-xl p-4 overflow-x-auto">
+                    <div className="mb-6">
+                      <h3 className="font-medium mb-2 text-sm">Peak hours (last 7 days)</h3>
+                      <div className="flex items-end gap-1 h-24 border rounded-xl p-3 overflow-x-auto">
                         {Array.from({ length: 24 }, (_, hour) => {
                           const entry = report.callsByHour?.find(h => h.hour === hour);
                           const count = entry?.count || 0;
                           return (
-                            <div key={hour} className="flex flex-col items-center justify-end h-full min-w-[20px]">
-                              <div className="w-full bg-indigo-500 rounded-t" style={{ height: `${(count / maxHour) * 100}%`, minHeight: count ? 6 : 0 }} />
-                              <span className="text-[9px] text-gray-400 mt-1">{hour}</span>
+                            <div key={hour} className="flex flex-col items-center justify-end h-full min-w-[16px]">
+                              <div className="w-full bg-indigo-500 rounded-t" style={{ height: `${(count / maxHour) * 100}%`, minHeight: count ? 4 : 0 }} />
+                              <span className="text-[8px] text-gray-400">{hour}</span>
                             </div>
                           );
                         })}
                       </div>
-                    </>
+                    </div>
                   )}
 
-                  <div className="grid md:grid-cols-2 gap-6">
-                    <div>
-                      <h3 className="font-medium mb-3">Recent call summaries</h3>
-                      <div className="space-y-2">
-                        {(report?.recentCalls || calls).slice(0, 8).map(c => (
-                          <div key={c.id} className="p-3 border rounded-lg text-sm">
-                            <div className="flex justify-between items-start gap-2">
-                              <span className="font-medium">{c.caller_number}</span>
-                              <div className="flex items-center gap-2">
-                                <IntentBadge intent={c.intent} />
-                                <span className="text-gray-400">{new Date(c.created_at).toLocaleString()}</span>
-                              </div>
-                            </div>
-                            <p className="text-gray-500 mt-1 whitespace-pre-wrap">{plainSummary(c.summary) || "No summary"}</p>
-                          </div>
+                  <h3 className="font-medium mb-3">Call history</h3>
+                  <CallsPanel
+                    calls={calls}
+                    filters={callFilters}
+                    onFiltersChange={setCallFilters}
+                    onSelectCall={(c) => setSelectedCall(c as CallLog)}
+                    selectedId={selectedCall?.id}
+                  />
+
+                  <h3 className="font-medium mt-8 mb-3">Recent leads</h3>
+                  <div className="mb-3">
+                    <input
+                      value={leadSearch}
+                      onChange={(e) => setLeadSearch(e.target.value)}
+                      placeholder="Search leads…"
+                      className="w-full max-w-md px-3 py-1.5 text-sm border rounded-lg dark:bg-gray-900 dark:border-gray-600"
+                    />
+                  </div>
+                  <div className="border rounded-xl overflow-hidden dark:border-gray-700">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-gray-800">
+                        <tr className="text-left text-xs text-gray-500 uppercase">
+                          <th className="p-3">Name</th>
+                          <th className="p-3 hidden sm:table-cell">Phone</th>
+                          <th className="p-3">Interest</th>
+                          <th className="p-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredLeads.slice(0, 10).map(l => (
+                          <tr key={l.id} className="border-t dark:border-gray-700">
+                            <td className="p-3 font-medium">{l.name}</td>
+                            <td className="p-3 text-gray-500 hidden sm:table-cell">{l.phone || l.caller_number}</td>
+                            <td className="p-3 text-gray-500">{l.interest || "—"}</td>
+                            <td className="p-3"><span className="text-xs px-2 py-0.5 rounded-full bg-gray-100">{l.status}</span></td>
+                          </tr>
                         ))}
-                        {!calls.length && <p className="text-gray-400">No call reports yet.</p>}
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="font-medium mb-3">Recent leads</h3>
-                      <div className="space-y-2">
-                        {(report?.recentLeads || leads).slice(0, 5).map(l => (
-                          <div key={l.id} className="p-3 border rounded-lg text-sm">
-                            <div className="font-medium">{l.name}</div>
-                            <div className="text-gray-500">{l.phone || l.caller_number} · {l.interest || "Callback"}</div>
-                            <p className="text-gray-400 mt-1">{l.message || "—"}</p>
-                          </div>
-                        ))}
-                        {!leads.length && <p className="text-gray-400">No leads captured yet.</p>}
-                      </div>
-                    </div>
+                      </tbody>
+                    </table>
+                    {!filteredLeads.length && <p className="p-6 text-center text-gray-400 text-sm">No leads match your search.</p>}
                   </div>
                 </>
               )}
@@ -972,76 +972,94 @@ export default function Dashboard() {
           )}
 
           {tab === "Calls" && (
-            <div>
-              <h2 className="text-2xl font-bold mb-6">Call History</h2>
-              {calls.length === 0 ? <p className="text-gray-400">No calls yet.</p> : (
-                <div className="space-y-3">
-                  {calls.map(c => (
-                    <div key={c.id} className="p-4 border rounded-xl">
-                      <div className="flex justify-between mb-2">
-                        <div className="flex items-center gap-3">
-                          <span className="font-medium">{c.caller_number || "Unknown"}</span>
-                          <span className="text-sm text-gray-400">{Math.floor((c.duration_seconds || 0) / 60)}m {(c.duration_seconds || 0) % 60}s</span>
-                          <IntentBadge intent={c.intent} />
-                          {c.transferred && <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Transferred</span>}
-                          {c.status === "max_duration" && <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full">8min cap</span>}
-                        </div>
-                        <span className="text-sm text-gray-400">{new Date(c.created_at).toLocaleString()}</span>
-                      </div>
-                      {c.summary && <p className="text-sm mb-2 whitespace-pre-wrap"><span className="font-medium">Summary:</span> {plainSummary(c.summary)}</p>}
-                      {c.transcript && (
-                        <details className="text-sm">
-                          <summary className="cursor-pointer text-blue-600">View Transcript</summary>
-                          <pre className="mt-2 p-3 bg-gray-50 rounded-lg whitespace-pre-wrap text-xs">{c.transcript}</pre>
-                        </details>
-                      )}
-                    </div>
-                  ))}
-                </div>
+            <div className="max-w-5xl h-full flex flex-col">
+              <h2 className="text-2xl font-bold mb-4">Call History</h2>
+              {!business ? <p className="text-gray-400">Set up business first.</p> : (
+                <CallsPanel
+                  calls={calls}
+                  filters={callFilters}
+                  onFiltersChange={setCallFilters}
+                  onSelectCall={(c) => setSelectedCall(c as CallLog)}
+                  selectedId={selectedCall?.id}
+                />
               )}
             </div>
           )}
 
           {tab === "Leads" && (
-            <div>
+            <div className="max-w-5xl">
               <h2 className="text-2xl font-bold mb-2">Leads & Callbacks</h2>
-              <p className="text-gray-500 text-sm mb-6">
+              <p className="text-gray-500 text-sm mb-4">
                 Captured when callers request a callback, leave a message, or transfer is unavailable after hours.
               </p>
               {!business ? <p className="text-gray-400">Set up business first.</p> : (
-                <div className="space-y-3">
-                  {leads.map(l => (
-                    <div key={l.id} className="p-4 border rounded-xl">
-                      <div className="flex flex-wrap justify-between gap-2 mb-2">
-                        <div>
-                          <span className="font-medium">{l.name}</span>
-                          <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
-                            l.status === "new" ? "bg-yellow-100 text-yellow-800" :
-                            l.status === "contacted" ? "bg-blue-100 text-blue-800" :
-                            "bg-gray-100 text-gray-600"
-                          }`}>{l.status}</span>
-                          <span className="ml-2 text-xs text-gray-400">{l.source}</span>
-                        </div>
-                        <span className="text-sm text-gray-400">{new Date(l.created_at).toLocaleString()}</span>
-                      </div>
-                      <div className="text-sm text-gray-600">
-                        {l.phone || l.caller_number || "No phone"} {l.email ? `· ${l.email}` : ""}
-                      </div>
-                      {l.interest && <p className="text-sm mt-1"><span className="font-medium">Interest:</span> {l.interest}</p>}
-                      {l.message && <p className="text-sm text-gray-500 mt-1">{l.message}</p>}
-                      <div className="flex gap-2 mt-3">
-                        {l.status === "new" && (
-                          <button onClick={() => updateLeadStatus(l.id, "contacted")} className="text-sm text-blue-600">Mark contacted</button>
-                        )}
-                        {l.status !== "closed" && (
-                          <button onClick={() => updateLeadStatus(l.id, "closed")} className="text-sm text-gray-500">Close</button>
-                        )}
-                        <button onClick={() => deleteLead(l.id)} className="text-sm text-red-500">Delete</button>
-                      </div>
+                <>
+                  <div className="mb-4">
+                    <input
+                      value={leadSearch}
+                      onChange={(e) => setLeadSearch(e.target.value)}
+                      placeholder="Search by name, phone, interest, message…"
+                      className="w-full max-w-md px-3 py-2 text-sm border rounded-lg dark:bg-gray-900 dark:border-gray-600"
+                    />
+                  </div>
+                  <div className="border rounded-xl overflow-hidden dark:border-gray-700">
+                    <div className="overflow-auto max-h-[min(520px,60vh)]">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 dark:bg-gray-800 sticky top-0">
+                          <tr className="text-left text-xs text-gray-500 uppercase">
+                            <th className="p-3">Name</th>
+                            <th className="p-3">Contact</th>
+                            <th className="p-3 hidden md:table-cell">Interest</th>
+                            <th className="p-3">Status</th>
+                            <th className="p-3 hidden sm:table-cell">When</th>
+                            <th className="p-3">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredLeads.map(l => (
+                            <tr key={l.id} className="border-t dark:border-gray-700">
+                              <td className="p-3">
+                                <div className="font-medium">{l.name}</div>
+                                <div className="text-xs text-gray-400">{l.source}</div>
+                              </td>
+                              <td className="p-3 text-gray-600">
+                                {l.phone || l.caller_number || "—"}
+                                {l.email && <div className="text-xs text-gray-400">{l.email}</div>}
+                              </td>
+                              <td className="p-3 text-gray-500 hidden md:table-cell max-w-xs truncate">{l.interest || l.message || "—"}</td>
+                              <td className="p-3">
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                                  l.status === "new" ? "bg-yellow-100 text-yellow-800" :
+                                  l.status === "contacted" ? "bg-blue-100 text-blue-800" :
+                                  "bg-gray-100 text-gray-600"
+                                }`}>{l.status}</span>
+                              </td>
+                              <td className="p-3 text-gray-400 text-xs hidden sm:table-cell whitespace-nowrap">
+                                {new Date(l.created_at || "").toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
+                              </td>
+                              <td className="p-3">
+                                <div className="flex flex-wrap gap-2">
+                                  {l.status === "new" && (
+                                    <button onClick={() => updateLeadStatus(l.id, "contacted")} className="text-xs text-blue-600 hover:underline">Contacted</button>
+                                  )}
+                                  {l.status !== "closed" && (
+                                    <button onClick={() => updateLeadStatus(l.id, "closed")} className="text-xs text-gray-500 hover:underline">Close</button>
+                                  )}
+                                  <button onClick={() => deleteLead(l.id)} className="text-xs text-red-500 hover:underline">Delete</button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-                  ))}
-                  {!leads.length && <p className="text-gray-400">No leads yet. They appear when the AI uses captureLead during a call.</p>}
-                </div>
+                    {!filteredLeads.length && (
+                      <p className="p-8 text-center text-gray-400 text-sm">
+                        {leads.length ? "No leads match your search." : "No leads yet. They appear when the AI uses captureLead during a call."}
+                      </p>
+                    )}
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -1182,6 +1200,13 @@ export default function Dashboard() {
               )}
             </div>
           )}
+          </div>
+          <CallDrawer
+            call={selectedCall}
+            leads={leads}
+            businessId={business?.id ?? null}
+            onClose={() => setSelectedCall(null)}
+          />
         </main>
       </div>
     </div>

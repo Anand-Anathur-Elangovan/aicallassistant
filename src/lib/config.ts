@@ -420,6 +420,9 @@ export function buildAssistantPayload(
       "that's all",
       "thank you, bye",
     ],
+    artifactPlan: {
+      recordingEnabled: true,
+    },
   };
 
   if (serverUrl) {
