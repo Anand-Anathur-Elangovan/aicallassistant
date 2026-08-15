@@ -140,7 +140,7 @@ export default function Dashboard() {
   const [bizForm, setBizForm] = useState({
     name: "", description: "", phone: "", language: "en", voice_id: "Elliot",
     voice_speed: 1, background_sound: "office", background_sound_url: "",
-    model_temperature: 0.82, first_message: "",
+    model_temperature: 0.78, first_message: "",
     notification_email: "", notification_telegram: "",
     transfer_message: "Please hold while I connect you to a team member.",
   });
@@ -224,7 +224,7 @@ export default function Dashboard() {
           voice_speed: biz.voice_speed ?? 1,
           background_sound: biz.background_sound || "office",
           background_sound_url: biz.background_sound_url || "",
-          model_temperature: biz.model_temperature ?? 0.82,
+          model_temperature: biz.model_temperature ?? 0.78,
           first_message: biz.first_message || "",
           notification_email: biz.notification_email || "", notification_telegram: biz.notification_telegram || "",
           transfer_message: biz.transfer_message || "Please hold while I connect you to a team member.",
@@ -241,7 +241,7 @@ export default function Dashboard() {
       const payload = {
         ...bizForm,
         voice_speed: parseFloat(String(bizForm.voice_speed)) || 1,
-        model_temperature: parseFloat(String(bizForm.model_temperature)) || 0.82,
+        model_temperature: parseFloat(String(bizForm.model_temperature)) || 0.78,
         first_message: bizForm.first_message?.trim() || null,
         background_sound_url: bizForm.background_sound === "custom" ? bizForm.background_sound_url : null,
       };
@@ -282,7 +282,7 @@ export default function Dashboard() {
         voice_speed: b.voice_speed ?? 1,
         background_sound: b.background_sound || "office",
         background_sound_url: b.background_sound_url || "",
-        model_temperature: b.model_temperature ?? 0.82,
+        model_temperature: b.model_temperature ?? 0.78,
         first_message: b.first_message || "",
         language: b.language || "auto",
       });
@@ -749,12 +749,12 @@ export default function Dashboard() {
                     <input type="range" min={0.5} max={1} step={0.02} value={bizForm.model_temperature}
                       onChange={e => setBizForm({ ...bizForm, model_temperature: parseFloat(e.target.value) })}
                       className="w-full" />
-                    <p className="text-xs text-gray-400 mt-1">Higher = more natural/varied speech. Default 0.82.</p>
+                    <p className="text-xs text-gray-400 mt-1">Higher = more varied speech. Default 0.78 keeps replies concise.</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium mb-1">Opening greeting (first message)</label>
                     <textarea value={bizForm.first_message} onChange={e => setBizForm({ ...bizForm, first_message: e.target.value })} className="w-full px-4 py-2 border rounded-lg" rows={2}
-                      placeholder="Leave blank for default: Hello! Thank you for calling, um, [Business]. How can I help you today?" />
+                      placeholder="Leave blank for default: Hello! Thanks for calling [Business] — how can I help?" />
                   </div>
                   <p className="text-xs text-gray-400">Pronunciation dictionaries: edit in Vapi dashboard, then use Pull from Vapi (voice settings sync here; advanced dict stays on Vapi).</p>
                 </div>

@@ -81,14 +81,15 @@ export function buildSystemPrompt(business: {
 ${business.description || ""}
 
 HOW YOU SOUND (very important):
-- You are a real person at the front desk on the phone — not a robot, not an IVR script, not reading a brochure
-- Speak naturally: use contractions (I'm, we'll, that's, you're), short sentences, and a warm friendly tone
-- Light natural fillers are good when a human would pause — e.g. "um", "ah", "let me see", "sure", "yeah", "right"
-- Use fillers sparingly (roughly one every few sentences max) — never overdo it or sound unsure on facts
-- Acknowledge before answering: "Good question", "Sure thing", "Yeah, absolutely", "Right, so..."
-- Vary your wording — do NOT repeat the same scripted phrase twice in one call
-- Never list things like bullet points aloud; weave information into normal conversation
-- When you need a moment to look something up, say it naturally: "Let me just check that for you, um, one sec"
+- Sound like a calm, capable front-desk person — warm but efficient, not chatty or rambling
+- Keep most replies to **1–3 short sentences**. Only go longer when reading specific product facts from a tool
+- **One question per turn** — never stack "are you asking about X, or Y, or Z?" in one breath
+- If the caller's request is clear enough, **answer or use a tool** — don't ask them to re-explain first
+- Use contractions and a natural tone (I'm, we'll, that's). Fillers like "um" or "uh" at most **once per reply**, often none — never chain fillers
+- Skip filler phrases like "Good question", "Let me clarify", "That's a great question" — just help them
+- Don't list every option upfront; give the best answer, then offer one follow-up if needed
+- When looking something up: "Let me check that for you" — then give the answer briefly
+- Never sound like you're reading a brochure or pitching multiple brands unless they asked for options
 
 CORE RULES:
 - Speak in the caller's language. Default: ${
@@ -138,7 +139,7 @@ LEADS / CALLBACKS (captureLead tool):
 
 /** Natural spoken greeting — fixed first line callers hear (TTS reads this verbatim). */
 export function buildFirstMessage(businessName: string) {
-  return `Hello! Thank you for calling, um, ${businessName}. How can I help you today?`;
+  return `Hello! Thanks for calling ${businessName} — how can I help?`;
 }
 
 export const MAX_CALL_DURATION_SECONDS = 480;
@@ -359,7 +360,7 @@ export function buildAssistantPayload(
     model: {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
-      temperature: business.model_temperature ?? 0.82,
+      temperature: business.model_temperature ?? 0.78,
       messages: [{ role: "system", content: systemPrompt }],
       tools: buildVapiTools(),
     },

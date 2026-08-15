@@ -63,7 +63,7 @@ export function extractVapiSettings(assistant: Record<string, unknown>): VapiSyn
     background_sound,
     background_sound_url,
     model_temperature:
-      typeof model.temperature === "number" ? model.temperature : 0.82,
+      typeof model.temperature === "number" ? model.temperature : 0.78,
     first_message: assistant.firstMessage
       ? String(assistant.firstMessage)
       : null,
@@ -89,7 +89,7 @@ export function compareVapiWithApp(
         live.background_sound !== (business.background_sound || "office"),
       model_temperature:
         Math.abs(
-          live.model_temperature - (business.model_temperature ?? 0.82)
+          live.model_temperature - (business.model_temperature ?? 0.78)
         ) > 0.01,
       first_message: live.first_message !== expectedFirst,
       firstMessageLive: live.first_message,
