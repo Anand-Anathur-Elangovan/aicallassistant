@@ -130,7 +130,7 @@ export default function Dashboard() {
 
   const [bizForm, setBizForm] = useState({
     name: "", description: "", phone: "", language: "en", voice_id: "Elliot",
-    voice_speed: 1, background_sound: "office", background_sound_url: "",
+    voice_speed: 1.1, background_sound: "office", background_sound_url: "",
     model_temperature: 0.78, first_message: "",
     notification_email: "", notification_telegram: "",
     transfer_message: "Please hold while I connect you to a team member.",
@@ -212,7 +212,7 @@ export default function Dashboard() {
         setBizForm({
           name: biz.name || "", description: biz.description || "", phone: biz.phone || "",
           language: biz.language || "en", voice_id: biz.voice_id || "Elliot",
-          voice_speed: biz.voice_speed ?? 1,
+          voice_speed: biz.voice_speed ?? 1.1,
           background_sound: biz.background_sound || "office",
           background_sound_url: biz.background_sound_url || "",
           model_temperature: biz.model_temperature ?? 0.78,
@@ -231,7 +231,7 @@ export default function Dashboard() {
     if (business) {
       const payload = {
         ...bizForm,
-        voice_speed: parseFloat(String(bizForm.voice_speed)) || 1,
+        voice_speed: parseFloat(String(bizForm.voice_speed)) || 1.1,
         model_temperature: parseFloat(String(bizForm.model_temperature)) || 0.78,
         first_message: bizForm.first_message?.trim() || null,
         background_sound_url: bizForm.background_sound === "custom" ? bizForm.background_sound_url : null,
@@ -725,7 +725,7 @@ export default function Dashboard() {
                   <div>
                     <label className="block text-sm font-medium mb-1">
                       Speed — {Number(bizForm.voice_speed).toFixed(2)}x
-                      <span className="text-gray-400 font-normal ml-1">(1.0 = normal, 1.10 = slightly faster)</span>
+                      <span className="text-gray-400 font-normal ml-1">(default 1.10 = slightly faster, natural pace)</span>
                     </label>
                     <input type="range" min={0.75} max={1.35} step={0.05} value={bizForm.voice_speed}
                       onChange={e => setBizForm({ ...bizForm, voice_speed: parseFloat(e.target.value) })}

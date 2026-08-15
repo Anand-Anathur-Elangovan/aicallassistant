@@ -59,7 +59,7 @@ export function extractVapiSettings(assistant: Record<string, unknown>): VapiSyn
 
   return {
     voice_id: String(voice.voiceId || "Elliot"),
-    voice_speed: typeof voice.speed === "number" ? voice.speed : 1,
+    voice_speed: typeof voice.speed === "number" ? voice.speed : 1.1,
     background_sound,
     background_sound_url,
     model_temperature:
@@ -84,7 +84,7 @@ export function compareVapiWithApp(
     drift: {
       voice_id: live.voice_id !== (business.voice_id || "Elliot"),
       voice_speed:
-        Math.abs(live.voice_speed - (business.voice_speed ?? 1)) > 0.01,
+        Math.abs(live.voice_speed - (business.voice_speed ?? 1.1)) > 0.01,
       background_sound:
         live.background_sound !== (business.background_sound || "office"),
       model_temperature:

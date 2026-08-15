@@ -10,6 +10,7 @@ import {
 import { getAvailableSlots, bookAppointment } from "@/lib/scheduling";
 import { getStaffAvailability } from "@/lib/store-status";
 import { classifyCallIntent } from "@/lib/call-intent";
+import { formatProductForSpeech } from "@/lib/product-speech";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -78,12 +79,13 @@ export async function POST(req: NextRequest) {
         });
       }
       const info = products
-        .map(
-          (p: { name: string; description: string; price: number; min_price: number; in_stock: boolean }) =>
-            `${p.name}: ${p.description || "No description"}. Price: $${p.price}${p.min_price ? ` (negotiable down to $${p.min_price})` : " (fixed price)"}. ${p.in_stock ? "In stock" : "Out of stock"}`
+        .map((p: { name: string; description: string; price: number; min_price: number; currency: string; in_stock: boolean }) =>
+          formatProductForSpeech(p)
         )
         .join("\n");
-      return NextResponse.json({ result: info });
+      return NextResponse.json({
+        result: `${info}\n\nTell the caller in plain language — no model codes or SKUs unless they ask.`,
+      });
     }
 
     // searchKnowledge

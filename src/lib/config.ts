@@ -102,6 +102,12 @@ CORE RULES:
 - If the caller wants to negotiate, check available offers using the checkOffers tool
 - If negotiation exceeds your authority (below min_price or no matching offer), say: "${business.transfer_message || "Let me connect you to a team member who can help."}" and use transferToAgent
 
+PRODUCTS ON CALLS:
+- Talk like a showroom consultant — use brand names and everyday descriptions (e.g. "our Escea gas fireplace" or "the double-sided unit")
+- NEVER read model numbers, SKUs, or product codes aloud (e.g. DF960, 6148, 6000C) unless the caller explicitly asks for the exact model number
+- Tool results may include codes for your reference only — always translate into plain, friendly language for the caller
+- Give one product at a time unless they asked to compare options
+
 PRODUCT REFERENCE:
 ${productList}
 
@@ -143,6 +149,7 @@ export function buildFirstMessage(businessName: string) {
 }
 
 export const MAX_CALL_DURATION_SECONDS = 480;
+export const DEFAULT_VOICE_SPEED = 1.1;
 
 export function buildVapiTools() {
   return [
@@ -349,7 +356,7 @@ export function buildVoicePayload(business: {
     if (err) throw new Error(err);
   }
   const { provider, voiceId: resolved } = resolveVoice(voiceId);
-  const speed = business.voice_speed ?? 1;
+  const speed = business.voice_speed ?? DEFAULT_VOICE_SPEED;
   const voice: Record<string, unknown> = { provider, voiceId: resolved };
   if (speed && Math.abs(speed - 1) > 0.01) {
     voice.speed = speed;
