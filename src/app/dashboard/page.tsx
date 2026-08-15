@@ -12,6 +12,12 @@ type Business = {
   working_hours: Record<string, string>;
   language: string;
   voice_id: string;
+  voice_speed?: number;
+  background_sound?: string;
+  background_sound_url?: string;
+  model_temperature?: number;
+  first_message?: string | null;
+  vapi_synced_at?: string | null;
   vapi_assistant_id: string | null;
   notification_email: string;
   notification_telegram: string;
@@ -131,13 +137,39 @@ export default function Dashboard() {
   const [dark, setDark] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
 
-  const [bizForm, setBizForm] = useState({ name: "", description: "", phone: "", language: "en", voice_id: "Elliot", notification_email: "", notification_telegram: "", transfer_message: "Please hold while I connect you to a team member." });
+  const [bizForm, setBizForm] = useState({
+    name: "", description: "", phone: "", language: "en", voice_id: "Elliot",
+    voice_speed: 1, background_sound: "office", background_sound_url: "",
+    model_temperature: 0.82, first_message: "",
+    notification_email: "", notification_telegram: "",
+    transfer_message: "Please hold while I connect you to a team member.",
+  });
+  const [vapiStatus, setVapiStatus] = useState<{
+    hasDrift?: boolean;
+    syncedAt?: string | null;
+    drift?: Record<string, unknown>;
+    error?: string;
+  } | null>(null);
   const [prodForm, setProdForm] = useState({ name: "", description: "", price: "", min_price: "", currency: "AUD", category: "" });
   const [kbForm, setKbForm] = useState({ title: "", content: "" });
   const [agentForm, setAgentForm] = useState({ name: "", phone: "", department: "" });
   const [offerForm, setOfferForm] = useState({ condition: "", discount_percent: "", description: "" });
   const [apptForm, setApptForm] = useState({ customer_name: "", customer_phone: "", showroom: "richmond", scheduled_at: "", notes: "" });
   const [closureForm, setClosureForm] = useState({ start_date: "", end_date: "", reason: "", is_emergency: false });
+
+  const loadVapiStatus = useCallback(async (bizId: string) => {
+    const status = await api("GET", undefined, { resource: "vapi_status", business_id: bizId });
+    if (status?.connected) {
+      setVapiStatus({
+        hasDrift: status.comparison?.hasDrift,
+        syncedAt: status.syncedAt,
+        drift: status.comparison?.drift,
+        error: status.error,
+      });
+    } else {
+      setVapiStatus(null);
+    }
+  }, []);
 
   const loadData = useCallback(async (bizId: string) => {
     const [p, k, c, a, o, ap, h, cl, r, hf, ld] = await Promise.all([
@@ -164,7 +196,8 @@ export default function Dashboard() {
     setHandoffs(Array.isArray(hf) ? hf : []);
     setLeads(Array.isArray(ld) ? ld : []);
     if (r?.totals) setReport(r);
-  }, []);
+    await loadVapiStatus(bizId);
+  }, [loadVapiStatus]);
 
   useEffect(() => {
     setDark(document.documentElement.classList.contains("dark"));
@@ -188,6 +221,11 @@ export default function Dashboard() {
         setBizForm({
           name: biz.name || "", description: biz.description || "", phone: biz.phone || "",
           language: biz.language || "en", voice_id: biz.voice_id || "Elliot",
+          voice_speed: biz.voice_speed ?? 1,
+          background_sound: biz.background_sound || "office",
+          background_sound_url: biz.background_sound_url || "",
+          model_temperature: biz.model_temperature ?? 0.82,
+          first_message: biz.first_message || "",
           notification_email: biz.notification_email || "", notification_telegram: biz.notification_telegram || "",
           transfer_message: biz.transfer_message || "Please hold while I connect you to a team member.",
         });
@@ -200,14 +238,57 @@ export default function Dashboard() {
   async function saveBusiness() {
     setSaving(true);
     if (business) {
-      const updated = await api("POST", { action: "update_business", id: business.id, ...bizForm });
-      if (updated?.id) setBusiness(updated);
-      else alert(updated?.error || "Failed to update");
+      const payload = {
+        ...bizForm,
+        voice_speed: parseFloat(String(bizForm.voice_speed)) || 1,
+        model_temperature: parseFloat(String(bizForm.model_temperature)) || 0.82,
+        first_message: bizForm.first_message?.trim() || null,
+        background_sound_url: bizForm.background_sound === "custom" ? bizForm.background_sound_url : null,
+      };
+      const updated = await api("POST", { action: "update_business", id: business.id, ...payload });
+      if (updated?.id) {
+        setBusiness(updated);
+        await loadVapiStatus(business.id);
+      } else alert(updated?.error || "Failed to update");
     } else {
       const created = await api("POST", { action: "create_business", ...bizForm });
       setBusiness(created);
       if (created.id) await loadData(created.id);
     }
+    setSaving(false);
+  }
+
+  async function pushToVapi() {
+    if (!business) return;
+    setSaving(true);
+    const res = await api("POST", { action: "sync_to_vapi", business_id: business.id });
+    if (res.ok) {
+      await loadVapiStatus(business.id);
+      alert("Pushed to Vapi — live assistant updated.");
+    } else alert(res.error || "Sync to Vapi failed");
+    setSaving(false);
+  }
+
+  async function pullFromVapi() {
+    if (!business) return;
+    setSaving(true);
+    const res = await api("POST", { action: "sync_from_vapi", business_id: business.id });
+    if (res.ok && res.business) {
+      const b = res.business;
+      setBusiness(b);
+      setBizForm({
+        ...bizForm,
+        voice_id: b.voice_id || "Elliot",
+        voice_speed: b.voice_speed ?? 1,
+        background_sound: b.background_sound || "office",
+        background_sound_url: b.background_sound_url || "",
+        model_temperature: b.model_temperature ?? 0.82,
+        first_message: b.first_message || "",
+        language: b.language || "auto",
+      });
+      await loadVapiStatus(business.id);
+      alert("Pulled from Vapi — voice settings updated in dashboard.");
+    } else alert(res.error || "Pull from Vapi failed");
     setSaving(false);
   }
 
@@ -589,50 +670,128 @@ export default function Dashboard() {
 
           {tab === "Assistant" && (
             <div>
-              <h2 className="text-2xl font-bold mb-6">Assistant Setup</h2>
-              <div className="max-w-lg space-y-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Business Name *</label>
-                  <input value={bizForm.name} onChange={e => setBizForm({ ...bizForm, name: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Description</label>
-                  <textarea value={bizForm.description} onChange={e => setBizForm({ ...bizForm, description: e.target.value })} className="w-full px-4 py-2 border rounded-lg" rows={3} />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Business Phone</label>
-                  <input value={bizForm.phone} onChange={e => setBizForm({ ...bizForm, phone: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
+              <h2 className="text-2xl font-bold mb-2">Assistant Setup</h2>
+              <p className="text-gray-500 text-sm mb-6">
+                Configure your AI receptionist here — same settings as Vapi dashboard (voice, speed, background sound, greeting).
+              </p>
+              <div className="max-w-2xl space-y-6">
+                <div className="space-y-4">
+                  <h3 className="font-medium">Business</h3>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Language</label>
-                    <select value={bizForm.language} onChange={e => setBizForm({ ...bizForm, language: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
-                      <option value="auto">Auto-detect</option>
-                      <option value="en">English</option>
-                      <option value="it">Italian</option>
-                      <option value="ta">Tamil</option>
-                      <option value="hi">Hindi</option>
-                      <option value="fr">French</option>
-                      <option value="es">Spanish</option>
-                      <option value="de">German</option>
-                    </select>
-                    <p className="text-xs text-gray-400 mt-1">Auto-detect uses multilingual speech recognition.</p>
+                    <label className="block text-sm font-medium mb-1">Business Name *</label>
+                    <input value={bizForm.name} onChange={e => setBizForm({ ...bizForm, name: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium mb-1">Voice / Gender</label>
-                    <select value={bizForm.voice_id} onChange={e => setBizForm({ ...bizForm, voice_id: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
-                      {VOICES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
-                    </select>
-                    <p className="text-xs text-gray-400 mt-1">Save to push voice change to the live Vapi agent.</p>
+                    <label className="block text-sm font-medium mb-1">Description</label>
+                    <textarea value={bizForm.description} onChange={e => setBizForm({ ...bizForm, description: e.target.value })} className="w-full px-4 py-2 border rounded-lg" rows={3} />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Business Phone</label>
+                    <input value={bizForm.phone} onChange={e => setBizForm({ ...bizForm, phone: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Transfer Message</label>
+                    <input value={bizForm.transfer_message} onChange={e => setBizForm({ ...bizForm, transfer_message: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Transfer Message</label>
-                  <input value={bizForm.transfer_message} onChange={e => setBizForm({ ...bizForm, transfer_message: e.target.value })} className="w-full px-4 py-2 border rounded-lg" />
+
+                <div className="p-4 border rounded-xl space-y-4">
+                  <h3 className="font-medium">Voice Settings</h3>
+                  <p className="text-xs text-gray-400">Matches Vapi → Assistant → Voice. Vapi Voices (Elliot, Savannah, etc.) support speed control.</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Speech language</label>
+                      <select value={bizForm.language} onChange={e => setBizForm({ ...bizForm, language: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
+                        <option value="auto">Auto-detect</option>
+                        <option value="en">English</option>
+                        <option value="it">Italian</option>
+                        <option value="ta">Tamil</option>
+                        <option value="hi">Hindi</option>
+                        <option value="fr">French</option>
+                        <option value="es">Spanish</option>
+                        <option value="de">German</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Voice</label>
+                      <select value={bizForm.voice_id} onChange={e => setBizForm({ ...bizForm, voice_id: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
+                        {VOICES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      Speed — {Number(bizForm.voice_speed).toFixed(2)}x
+                      <span className="text-gray-400 font-normal ml-1">(1.0 = normal, 1.10 = slightly faster)</span>
+                    </label>
+                    <input type="range" min={0.75} max={1.35} step={0.05} value={bizForm.voice_speed}
+                      onChange={e => setBizForm({ ...bizForm, voice_speed: parseFloat(e.target.value) })}
+                      className="w-full" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Background sound</label>
+                    <select value={bizForm.background_sound} onChange={e => setBizForm({ ...bizForm, background_sound: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
+                      <option value="office">Office (default for phone)</option>
+                      <option value="off">Off</option>
+                      <option value="custom">Custom URL</option>
+                    </select>
+                  </div>
+                  {bizForm.background_sound === "custom" && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Custom background audio URL</label>
+                      <input value={bizForm.background_sound_url} onChange={e => setBizForm({ ...bizForm, background_sound_url: e.target.value })} className="w-full px-4 py-2 border rounded-lg" placeholder="https://..." />
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-medium mb-1">
+                      AI warmth — temperature {Number(bizForm.model_temperature).toFixed(2)}
+                    </label>
+                    <input type="range" min={0.5} max={1} step={0.02} value={bizForm.model_temperature}
+                      onChange={e => setBizForm({ ...bizForm, model_temperature: parseFloat(e.target.value) })}
+                      className="w-full" />
+                    <p className="text-xs text-gray-400 mt-1">Higher = more natural/varied speech. Default 0.82.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Opening greeting (first message)</label>
+                    <textarea value={bizForm.first_message} onChange={e => setBizForm({ ...bizForm, first_message: e.target.value })} className="w-full px-4 py-2 border rounded-lg" rows={2}
+                      placeholder="Leave blank for default: Hello! Thank you for calling, um, [Business]. How can I help you today?" />
+                  </div>
+                  <p className="text-xs text-gray-400">Pronunciation dictionaries: edit in Vapi dashboard, then use Pull from Vapi (voice settings sync here; advanced dict stays on Vapi).</p>
                 </div>
-                <div className="flex gap-3 pt-2">
+
+                {business?.vapi_assistant_id && (
+                  <div className={`p-4 border rounded-xl ${vapiStatus?.hasDrift ? "border-amber-300 bg-amber-50" : "border-green-200 bg-green-50"}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                      <div>
+                        <p className="font-medium text-sm">Vapi sync</p>
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          {vapiStatus?.hasDrift
+                            ? "Dashboard and Vapi differ — push or pull to align."
+                            : "Dashboard and Vapi are in sync."}
+                          {vapiStatus?.syncedAt && ` Last sync: ${new Date(vapiStatus.syncedAt).toLocaleString()}`}
+                        </p>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full ${vapiStatus?.hasDrift ? "bg-amber-200 text-amber-900" : "bg-green-200 text-green-800"}`}>
+                        {vapiStatus?.hasDrift ? "Drift detected" : "In sync"}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={pushToVapi} disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50">
+                        Push to Vapi
+                      </button>
+                      <button onClick={pullFromVapi} disabled={saving} className="px-4 py-2 border rounded-lg text-sm disabled:opacity-50">
+                        Pull from Vapi
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      <strong>Push</strong> = send dashboard settings + products/prompt to Vapi. <strong>Pull</strong> = import voice/speed/greeting from Vapi into dashboard. Save also pushes automatically.
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-3 pt-2">
                   <button onClick={saveBusiness} disabled={saving || !bizForm.name} className="px-6 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50">
-                    {saving ? "Saving..." : business ? "Update Business & Voice" : "Create Business"}
+                    {saving ? "Saving..." : business ? "Save & Push to Vapi" : "Create Business"}
                   </button>
                   {business && !business.vapi_assistant_id && (
                     <button onClick={createAssistant} disabled={saving} className="px-6 py-2 bg-green-600 text-white rounded-lg disabled:opacity-50">Activate AI Assistant</button>

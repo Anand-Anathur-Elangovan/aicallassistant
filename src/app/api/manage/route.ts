@@ -2,17 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   supabaseAdmin,
   createVapiAssistant,
-  updateVapiAssistant,
   generateEmbedding,
-  buildSystemPrompt,
-  resolveVoice,
-  resolveTranscriberLanguage,
-  buildVapiTools,
-  buildFirstMessage,
   MAX_CALL_DURATION_SECONDS,
 } from "@/lib/config";
 import { createClient } from "@supabase/supabase-js";
 import { ensureDefaultStoreHours } from "@/lib/scheduling";
+import {
+  fetchVapiAssistant,
+  syncToVapi,
+  extractVapiSettings,
+  compareVapiWithAppFull,
+} from "@/lib/vapi-sync";
+
+async function loadBusinessCatalog(businessId: string, userId: string) {
+  const { data: biz } = await supabaseAdmin
+    .from("businesses")
+    .select("*")
+    .eq("id", businessId)
+    .eq("user_id", userId)
+    .single();
+  if (!biz) return null;
+
+  const { data: products } = await supabaseAdmin
+    .from("products")
+    .select("name, price, currency")
+    .eq("business_id", businessId);
+  const { data: offers } = await supabaseAdmin
+    .from("offer_rules")
+    .select("condition, discount_percent")
+    .eq("business_id", businessId)
+    .eq("is_active", true);
+
+  return {
+    ...biz,
+    products: products || [],
+    offer_rules: offers || [],
+  };
+}
 
 async function getUser(req: NextRequest) {
   const token = req.headers.get("authorization")?.replace("Bearer ", "");
@@ -55,6 +81,30 @@ export async function GET(req: NextRequest) {
     .eq("user_id", user.id)
     .single();
   if (!biz) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  if (resource === "vapi_status") {
+    const merged = await loadBusinessCatalog(businessId, user.id);
+    if (!merged) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!merged.vapi_assistant_id) {
+      return NextResponse.json({ connected: false });
+    }
+    try {
+      const assistant = await fetchVapiAssistant(merged.vapi_assistant_id);
+      const comparison = compareVapiWithAppFull(assistant, merged);
+      return NextResponse.json({
+        connected: true,
+        assistantId: merged.vapi_assistant_id,
+        syncedAt: merged.vapi_synced_at || null,
+        comparison,
+      });
+    } catch (e) {
+      return NextResponse.json({
+        connected: true,
+        assistantId: merged.vapi_assistant_id,
+        error: e instanceof Error ? e.message : "Failed to fetch Vapi",
+      });
+    }
+  }
 
   const tableMap: Record<string, string> = {
     products: "products",
@@ -219,45 +269,80 @@ export async function POST(req: NextRequest) {
 
     if (biz.vapi_assistant_id) {
       const merged = { ...biz, ...updates };
-      const { data: products } = await supabaseAdmin
-        .from("products")
-        .select("name, price, currency")
-        .eq("business_id", id);
-      const { data: offers } = await supabaseAdmin
-        .from("offer_rules")
-        .select("condition, discount_percent")
-        .eq("business_id", id)
-        .eq("is_active", true);
-
-      const systemPrompt = buildSystemPrompt({
-        ...merged,
-        products: products || [],
-        offer_rules: offers || [],
-      });
-      await updateVapiAssistant(biz.vapi_assistant_id, {
-        model: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5-20251001",
-          temperature: 0.82,
-          messages: [{ role: "system", content: systemPrompt }],
-          tools: buildVapiTools(),
-        },
-        maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
-        voice: resolveVoice(
-          (updates.voice_id as string) || merged.voice_id
-        ),
-        firstMessage: buildFirstMessage(merged.name),
-        transcriber: {
-          provider: "deepgram",
-          model: "nova-2",
-          language: resolveTranscriberLanguage(
-            (updates.language as string) || merged.language
-          ),
-        },
-      });
+      const catalog = await loadBusinessCatalog(id, user.id);
+      if (catalog) {
+        try {
+          await syncToVapi(biz.vapi_assistant_id, { ...catalog, ...updates });
+          await supabaseAdmin
+            .from("businesses")
+            .update({ vapi_synced_at: new Date().toISOString() })
+            .eq("id", id);
+        } catch (e) {
+          console.error("Vapi sync on save failed:", e);
+        }
+      }
     }
 
     return NextResponse.json(data);
+  }
+
+  if (action === "sync_to_vapi") {
+    const { business_id } = payload;
+    const catalog = await loadBusinessCatalog(business_id, user.id);
+    if (!catalog) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!catalog.vapi_assistant_id) {
+      return NextResponse.json({ error: "No Vapi assistant linked" }, { status: 400 });
+    }
+    try {
+      await syncToVapi(catalog.vapi_assistant_id, catalog);
+      const now = new Date().toISOString();
+      await supabaseAdmin
+        .from("businesses")
+        .update({ vapi_synced_at: now })
+        .eq("id", business_id);
+      return NextResponse.json({ ok: true, syncedAt: now });
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "Sync failed" },
+        { status: 500 }
+      );
+    }
+  }
+
+  if (action === "sync_from_vapi") {
+    const { business_id } = payload;
+    const catalog = await loadBusinessCatalog(business_id, user.id);
+    if (!catalog) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!catalog.vapi_assistant_id) {
+      return NextResponse.json({ error: "No Vapi assistant linked" }, { status: 400 });
+    }
+    try {
+      const assistant = await fetchVapiAssistant(catalog.vapi_assistant_id);
+      const settings = extractVapiSettings(assistant);
+      const { data, error } = await supabaseAdmin
+        .from("businesses")
+        .update({
+          voice_id: settings.voice_id,
+          voice_speed: settings.voice_speed,
+          background_sound: settings.background_sound,
+          background_sound_url: settings.background_sound_url,
+          model_temperature: settings.model_temperature,
+          first_message: settings.first_message,
+          language: settings.language,
+          vapi_synced_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", business_id)
+        .select()
+        .single();
+      if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      return NextResponse.json({ ok: true, business: data, pulled: settings });
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "Pull failed" },
+        { status: 500 }
+      );
+    }
   }
 
   // ─── Create Vapi Assistant ───

@@ -307,29 +307,67 @@ export function resolveTranscriberLanguage(lang?: string) {
   return map[lang] || "en";
 }
 
-export async function createVapiAssistant(
-  business: Parameters<typeof buildSystemPrompt>[0] & {
-    voice_id?: string;
-    language?: string;
-  },
-  serverUrl: string
+export function buildVoicePayload(business: {
+  voice_id?: string;
+  voice_speed?: number;
+}) {
+  const { provider, voiceId } = resolveVoice(business.voice_id);
+  const speed = business.voice_speed ?? 1;
+  const voice: Record<string, unknown> = { provider, voiceId };
+  if (speed && Math.abs(speed - 1) > 0.01) {
+    voice.speed = speed;
+  }
+  return voice;
+}
+
+export function buildBackgroundSound(business: {
+  background_sound?: string;
+  background_sound_url?: string;
+}) {
+  const mode = business.background_sound || "office";
+  if (mode === "custom" && business.background_sound_url) {
+    return business.background_sound_url;
+  }
+  if (mode === "off") return "off";
+  return "office";
+}
+
+export type BusinessForVapi = Parameters<typeof buildSystemPrompt>[0] & {
+  voice_id?: string;
+  voice_speed?: number;
+  background_sound?: string;
+  background_sound_url?: string;
+  model_temperature?: number;
+  first_message?: string | null;
+  language?: string;
+};
+
+export function buildAssistantPayload(
+  business: BusinessForVapi,
+  serverUrl?: string
 ) {
   const systemPrompt = buildSystemPrompt(business);
+  const firstMessage =
+    business.first_message?.trim() || buildFirstMessage(business.name);
 
-  return vapiRequest("/assistant", "POST", {
+  const payload: Record<string, unknown> = {
     name: `Receptionist - ${business.name}`,
+    firstMessage,
+    maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
+    backgroundSound: buildBackgroundSound(business),
+    voice: buildVoicePayload(business),
     model: {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
-      temperature: 0.82,
+      temperature: business.model_temperature ?? 0.82,
       messages: [{ role: "system", content: systemPrompt }],
       tools: buildVapiTools(),
     },
-    maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
-    voice: resolveVoice(business.voice_id),
-    firstMessage: buildFirstMessage(business.name),
-    serverUrl,
-    serverUrlSecret: process.env.VAPI_SERVER_SECRET || undefined,
+    transcriber: {
+      provider: "deepgram",
+      model: "nova-2",
+      language: resolveTranscriberLanguage(business.language),
+    },
     endCallPhrases: [
       "goodbye",
       "bye",
@@ -337,12 +375,21 @@ export async function createVapiAssistant(
       "that's all",
       "thank you, bye",
     ],
-    transcriber: {
-      provider: "deepgram",
-      model: "nova-2",
-      language: resolveTranscriberLanguage(business.language),
-    },
-  });
+  };
+
+  if (serverUrl) {
+    payload.serverUrl = serverUrl;
+    payload.serverUrlSecret = process.env.VAPI_SERVER_SECRET || undefined;
+  }
+
+  return payload;
+}
+
+export async function createVapiAssistant(
+  business: BusinessForVapi & { voice_id?: string; language?: string },
+  serverUrl: string
+) {
+  return vapiRequest("/assistant", "POST", buildAssistantPayload(business, serverUrl));
 }
 
 export async function updateVapiAssistant(
