@@ -7,6 +7,8 @@ import {
   buildSystemPrompt,
   resolveVoice,
   resolveTranscriberLanguage,
+  buildVapiTools,
+  MAX_CALL_DURATION_SECONDS,
 } from "@/lib/config";
 import { createClient } from "@supabase/supabase-js";
 import { ensureDefaultStoreHours } from "@/lib/scheduling";
@@ -63,6 +65,7 @@ export async function GET(req: NextRequest) {
     hours: "store_hours",
     closures: "store_closures",
     handoffs: "transfer_handoffs",
+    leads: "leads",
   };
 
   if (resource === "reports") {
@@ -76,22 +79,40 @@ export async function GET(req: NextRequest) {
       .select("*")
       .eq("business_id", businessId)
       .order("scheduled_at", { ascending: true });
+    const { data: leads } = await supabaseAdmin
+      .from("leads")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: false });
 
     const allCalls = calls || [];
     const allAppts = appointments || [];
+    const allLeads = leads || [];
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 86400000);
     const callsWeek = allCalls.filter((c) => new Date(c.created_at) >= weekAgo);
     const totalDuration = allCalls.reduce((s, c) => s + (c.duration_seconds || 0), 0);
     const transferred = allCalls.filter((c) => c.transferred).length;
+    const maxDurationHits = allCalls.filter(
+      (c) => c.status === "max_duration" || (c.duration_seconds || 0) >= MAX_CALL_DURATION_SECONDS - 15
+    ).length;
     const upcoming = allAppts.filter(
       (a) => a.status === "scheduled" && new Date(a.scheduled_at) >= now
     );
     const byDay: Record<string, number> = {};
+    const byHour: Record<number, number> = {};
+    const byIntent: Record<string, number> = {};
     for (const c of callsWeek) {
       const d = c.created_at.slice(0, 10);
       byDay[d] = (byDay[d] || 0) + 1;
+      const hour = new Date(c.created_at).getHours();
+      byHour[hour] = (byHour[hour] || 0) + 1;
     }
+    for (const c of allCalls) {
+      const intent = c.intent || "general";
+      byIntent[intent] = (byIntent[intent] || 0) + 1;
+    }
+    const newLeads = allLeads.filter((l) => l.status === "new").length;
 
     return NextResponse.json({
       totals: {
@@ -107,12 +128,22 @@ export async function GET(req: NextRequest) {
           : 0,
         upcomingAppointments: upcoming.length,
         appointmentsTotal: allAppts.length,
+        leadsTotal: allLeads.length,
+        newLeads,
+        maxDurationHits,
       },
       callsByDay: Object.entries(byDay)
         .map(([date, count]) => ({ date, count }))
         .sort((a, b) => a.date.localeCompare(b.date)),
+      callsByHour: Object.entries(byHour)
+        .map(([hour, count]) => ({ hour: parseInt(hour), count }))
+        .sort((a, b) => a.hour - b.hour),
+      intentBreakdown: Object.entries(byIntent)
+        .map(([intent, count]) => ({ intent, count }))
+        .sort((a, b) => b.count - a.count),
       recentCalls: allCalls.slice(0, 10),
       upcomingAppointments: upcoming.slice(0, 10),
+      recentLeads: allLeads.slice(0, 5),
     });
   }
 
@@ -204,8 +235,12 @@ export async function POST(req: NextRequest) {
       });
       await updateVapiAssistant(biz.vapi_assistant_id, {
         model: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5-20251001",
           messages: [{ role: "system", content: systemPrompt }],
+          tools: buildVapiTools(),
         },
+        maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
         voice: resolveVoice(
           (updates.voice_id as string) || merged.voice_id
         ),
@@ -497,6 +532,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === "update_lead_status") {
+    const { id, business_id, status } = payload;
+    const { data: biz } = await supabaseAdmin.from("businesses").select("id").eq("id", business_id).eq("user_id", user.id).single();
+    if (!biz) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const { data, error } = await supabaseAdmin
+      .from("leads")
+      .update({ status })
+      .eq("id", id)
+      .eq("business_id", business_id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+    return NextResponse.json(data);
+  }
+
+  if (action === "delete_lead") {
+    const { id, business_id } = payload;
+    const { data: biz } = await supabaseAdmin.from("businesses").select("id").eq("id", business_id).eq("user_id", user.id).single();
+    if (!biz) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    await supabaseAdmin.from("leads").delete().eq("id", id).eq("business_id", business_id);
+    return NextResponse.json({ ok: true });
+  }
+
   // ─── Danger zone: wipe business data ───
   if (action === "clear_business_data") {
     const { business_id, confirm } = payload;
@@ -512,6 +570,7 @@ export async function POST(req: NextRequest) {
     if (!biz) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const tables = [
+      "leads",
       "transfer_handoffs",
       "appointments",
       "store_closures",

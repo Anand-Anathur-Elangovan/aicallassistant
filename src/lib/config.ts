@@ -101,28 +101,164 @@ ${offerList}
 BUSINESS HOURS: ${hours}
 
 APPOINTMENTS / SHOWROOM VISITS:
-- If the caller wants to visit a showroom or book an appointment, use checkAvailability then bookAppointment
+- Product questions, pricing, and general info work ANY time — even outside business hours
+- ONLY use checkAvailability / bookAppointment when the caller wants to VISIT the showroom in person
+- If checkAvailability says the store is closed right now, explain why and offer the next open slots — do NOT book for a closed time
 - Always collect customer name and phone before booking
-- If a date is closed (leave / emergency), explain the reason from the tool result and offer other available slots
 - Confirm the booked date/time clearly with the caller
 
+AFTER-HOURS & TRANSFERS:
+- transferToAgent only works during staffed hours — if the tool says staff are unavailable, do NOT retry transfer
+- When transfer is blocked after hours, use captureLead to record a callback (name, phone, reason)
+- You can still answer questions, check products, and book future visits anytime
+
 TRANSFER FALLBACK:
-- If transferToAgent fails or cannot connect, always give the human agent's phone number clearly
-- Offer to repeat the number slowly so the caller can note it
-- If the caller asks to confirm the number, read it digit by digit and ask them to repeat it back
-- Also offer to take a callback message (name + number)
+- If transferToAgent fails or cannot connect, give the human agent's phone number clearly
+- Offer to repeat the number slowly; use captureLead if they want a callback instead
 
 ESCALATION RULES:
-- If the caller explicitly asks to speak to a person/human/manager → use transferToAgent immediately
-- If the caller is upset or angry → acknowledge their concern, offer to transfer
-- If the caller says it's an emergency → transfer immediately and note it as urgent
-- If you cannot answer a question after checking knowledge base → offer to transfer or take a message
+- If the caller explicitly asks to speak to a person → try transferToAgent (or captureLead if after hours)
+- If upset or angry → acknowledge, then transfer or captureLead
+- If you cannot answer after checking knowledge → offer transfer or captureLead
 
-MESSAGE TAKING:
-When the caller wants to leave a message or the relevant person is unavailable:
-- Ask for their name, phone number, and a brief message
-- Confirm you'll pass it along
-- Say the team will get back to them as soon as possible`;
+LEADS / CALLBACKS (captureLead tool):
+- Use when: caller wants a callback, transfer failed, after-hours transfer request, or they ask to leave a message
+- Collect: name (required), phone, what they're interested in, and a short message
+- Confirm the team will call back during business hours`;
+}
+
+export const MAX_CALL_DURATION_SECONDS = 480;
+
+export function buildVapiTools() {
+  return [
+    {
+      type: "function",
+      function: {
+        name: "checkProduct",
+        description:
+          "Look up product or service details including price, availability, and description",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Product name or search query" },
+          },
+          required: ["query"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "searchKnowledge",
+        description:
+          "Search the business knowledge base for answers to questions about policies, hours, FAQs, etc.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "The question or topic to search for" },
+          },
+          required: ["query"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "checkOffers",
+        description:
+          "Check available discounts and offers based on the customer's situation",
+        parameters: {
+          type: "object",
+          properties: {
+            situation: {
+              type: "string",
+              description: "Description of why the customer wants a discount",
+            },
+          },
+          required: ["situation"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "transferToAgent",
+        description:
+          "Transfer the call to a human agent during business hours. Use when customer requests a human or issue needs escalation.",
+        parameters: {
+          type: "object",
+          properties: {
+            reason: { type: "string", description: "Why the transfer is needed" },
+            department: {
+              type: "string",
+              description: "Preferred department (sales, support, general)",
+            },
+            urgent: { type: "boolean", description: "Whether this is an emergency/urgent transfer" },
+          },
+          required: ["reason"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "captureLead",
+        description:
+          "Record a callback request or lead when the caller wants someone to call them back, leave a message, or transfer is unavailable.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Caller's full name" },
+            phone: { type: "string", description: "Callback phone number" },
+            email: { type: "string", description: "Email if provided" },
+            interest: {
+              type: "string",
+              description: "What they are interested in (product, visit, support, etc.)",
+            },
+            message: { type: "string", description: "Brief message or reason for callback" },
+          },
+          required: ["name"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "checkAvailability",
+        description:
+          "Check available showroom visit appointment slots and any store closures. Use only for in-person visits.",
+        parameters: {
+          type: "object",
+          properties: {
+            from_date: { type: "string", description: "Start date YYYY-MM-DD (default today)" },
+            showroom: { type: "string", description: "richmond, moorabbin, or general" },
+          },
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "bookAppointment",
+        description:
+          "Book a showroom visit after confirming availability. Requires customer name and preferred datetime.",
+        parameters: {
+          type: "object",
+          properties: {
+            customer_name: { type: "string" },
+            customer_phone: { type: "string" },
+            showroom: { type: "string" },
+            scheduled_at: {
+              type: "string",
+              description: "YYYY-MM-DD HH:MM or ISO datetime",
+            },
+            notes: { type: "string" },
+          },
+          required: ["customer_name", "scheduled_at"],
+        },
+      },
+    },
+  ];
 }
 
 export const VOICE_OPTIONS = [
@@ -172,133 +308,9 @@ export async function createVapiAssistant(
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
       messages: [{ role: "system", content: systemPrompt }],
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "checkProduct",
-            description:
-              "Look up product or service details including price, availability, and description",
-            parameters: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description: "Product name or search query",
-                },
-              },
-              required: ["query"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "searchKnowledge",
-            description:
-              "Search the business knowledge base for answers to questions about policies, hours, FAQs, etc.",
-            parameters: {
-              type: "object",
-              properties: {
-                query: {
-                  type: "string",
-                  description: "The question or topic to search for",
-                },
-              },
-              required: ["query"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "checkOffers",
-            description:
-              "Check available discounts and offers based on the customer's situation",
-            parameters: {
-              type: "object",
-              properties: {
-                situation: {
-                  type: "string",
-                  description:
-                    "Description of why the customer wants a discount",
-                },
-              },
-              required: ["situation"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "transferToAgent",
-            description:
-              "Transfer the call to a human agent. Use when customer requests a human, negotiation exceeds authority, or issue is too complex.",
-            parameters: {
-              type: "object",
-              properties: {
-                reason: {
-                  type: "string",
-                  description: "Why the transfer is needed",
-                },
-                department: {
-                  type: "string",
-                  description: "Preferred department (sales, support, general)",
-                },
-                urgent: {
-                  type: "boolean",
-                  description: "Whether this is an emergency/urgent transfer",
-                },
-              },
-              required: ["reason"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "checkAvailability",
-            description:
-              "Check available showroom visit appointment slots and any store closures (leave/emergency).",
-            parameters: {
-              type: "object",
-              properties: {
-                from_date: {
-                  type: "string",
-                  description: "Start date YYYY-MM-DD (default today)",
-                },
-                showroom: {
-                  type: "string",
-                  description: "richmond, moorabbin, or general",
-                },
-              },
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "bookAppointment",
-            description:
-              "Book a showroom visit after confirming availability. Requires customer name and preferred datetime.",
-            parameters: {
-              type: "object",
-              properties: {
-                customer_name: { type: "string" },
-                customer_phone: { type: "string" },
-                showroom: { type: "string" },
-                scheduled_at: {
-                  type: "string",
-                  description: "YYYY-MM-DD HH:MM or ISO datetime",
-                },
-                notes: { type: "string" },
-              },
-              required: ["customer_name", "scheduled_at"],
-            },
-          },
-        },
-      ],
+      tools: buildVapiTools(),
     },
+    maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
     voice: resolveVoice(business.voice_id),
     firstMessage: `Hello, thank you for calling ${business.name}. How can I help you today?`,
     serverUrl,

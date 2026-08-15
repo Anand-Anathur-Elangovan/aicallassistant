@@ -19,7 +19,11 @@ type Business = {
 };
 type Product = { id: string; name: string; description: string; price: number; min_price: number; currency: string; category: string; in_stock: boolean };
 type KnowledgeItem = { id: string; title: string; content: string; created_at: string };
-type CallLog = { id: string; caller_number: string; duration_seconds: number; summary: string; transcript: string; status: string; transferred: boolean; created_at: string };
+type CallLog = { id: string; caller_number: string; duration_seconds: number; summary: string; transcript: string; status: string; transferred: boolean; intent?: string; created_at: string };
+type Lead = {
+  id: string; name: string; phone: string; email: string; interest: string; message: string;
+  source: string; status: string; caller_number: string; created_at: string;
+};
 type Agent = { id: string; name: string; phone: string; department: string; is_available: boolean };
 type OfferRule = { id: string; condition: string; discount_percent: number; description: string; is_active: boolean };
 type Appointment = {
@@ -39,13 +43,17 @@ type Report = {
   totals: {
     calls: number; callsThisWeek: number; totalDurationMinutes: number; avgDurationSeconds: number;
     transferred: number; transferRate: number; upcomingAppointments: number; appointmentsTotal: number;
+    leadsTotal?: number; newLeads?: number; maxDurationHits?: number;
   };
   callsByDay: { date: string; count: number }[];
+  callsByHour?: { hour: number; count: number }[];
+  intentBreakdown?: { intent: string; count: number }[];
   recentCalls: CallLog[];
   upcomingAppointments: Appointment[];
+  recentLeads?: Lead[];
 };
 
-const TABS = ["Overview", "Reports", "Assistant", "Products", "Knowledge", "Appointments", "Hours", "Calls", "Transfers", "Agents", "Offers", "Settings"] as const;
+const TABS = ["Overview", "Reports", "Assistant", "Products", "Knowledge", "Appointments", "Hours", "Calls", "Leads", "Transfers", "Agents", "Offers", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const VOICES = [
@@ -86,6 +94,23 @@ function plainSummary(text?: string) {
     .trim();
 }
 
+const INTENT_STYLES: Record<string, string> = {
+  sales: "bg-green-100 text-green-800",
+  support: "bg-blue-100 text-blue-800",
+  booking: "bg-purple-100 text-purple-800",
+  complaint: "bg-red-100 text-red-800",
+  general: "bg-gray-100 text-gray-700",
+};
+
+function IntentBadge({ intent }: { intent?: string }) {
+  const key = intent || "general";
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${INTENT_STYLES[key] || INTENT_STYLES.general}`}>
+      {key}
+    </span>
+  );
+}
+
 export default function Dashboard() {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>("Overview");
@@ -99,6 +124,7 @@ export default function Dashboard() {
   const [hours, setHours] = useState<StoreHour[]>([]);
   const [closures, setClosures] = useState<Closure[]>([]);
   const [handoffs, setHandoffs] = useState<Handoff[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [report, setReport] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -114,7 +140,7 @@ export default function Dashboard() {
   const [closureForm, setClosureForm] = useState({ start_date: "", end_date: "", reason: "", is_emergency: false });
 
   const loadData = useCallback(async (bizId: string) => {
-    const [p, k, c, a, o, ap, h, cl, r, hf] = await Promise.all([
+    const [p, k, c, a, o, ap, h, cl, r, hf, ld] = await Promise.all([
       api("GET", undefined, { resource: "products", business_id: bizId }),
       api("GET", undefined, { resource: "knowledge", business_id: bizId }),
       api("GET", undefined, { resource: "calls", business_id: bizId }),
@@ -125,6 +151,7 @@ export default function Dashboard() {
       api("GET", undefined, { resource: "closures", business_id: bizId }),
       api("GET", undefined, { resource: "reports", business_id: bizId }),
       api("GET", undefined, { resource: "handoffs", business_id: bizId }),
+      api("GET", undefined, { resource: "leads", business_id: bizId }),
     ]);
     setProducts(Array.isArray(p) ? p : []);
     setKnowledge(Array.isArray(k) ? k : []);
@@ -135,6 +162,7 @@ export default function Dashboard() {
     setHours(Array.isArray(h) ? h : []);
     setClosures(Array.isArray(cl) ? cl : []);
     setHandoffs(Array.isArray(hf) ? hf : []);
+    setLeads(Array.isArray(ld) ? ld : []);
     if (r?.totals) setReport(r);
   }, []);
 
@@ -291,6 +319,18 @@ export default function Dashboard() {
     setClosures(closures.filter(c => c.id !== id));
   }
 
+  async function updateLeadStatus(id: string, status: string) {
+    if (!business) return;
+    const updated = await api("POST", { action: "update_lead_status", id, business_id: business.id, status });
+    if (updated.id) setLeads(leads.map(l => l.id === id ? { ...l, status } : l));
+  }
+
+  async function deleteLead(id: string) {
+    if (!business) return;
+    await api("POST", { action: "delete_lead", id, business_id: business.id });
+    setLeads(leads.filter(l => l.id !== id));
+  }
+
   async function addAppointment() {
     if (!business) return;
     setSaving(true);
@@ -359,6 +399,7 @@ export default function Dashboard() {
 
   const totals = report?.totals;
   const maxDay = Math.max(1, ...(report?.callsByDay?.map(d => d.count) || [1]));
+  const maxHour = Math.max(1, ...(report?.callsByHour?.map(d => d.count) || [1]));
 
   return (
     <div className="flex-1 flex flex-col">
@@ -399,7 +440,7 @@ export default function Dashboard() {
                     {[
                       { label: "Total Calls", value: totals?.calls ?? calls.length },
                       { label: "This Week", value: totals?.callsThisWeek ?? 0 },
-                      { label: "Transferred", value: totals?.transferred ?? 0 },
+                      { label: "New Leads", value: totals?.newLeads ?? leads.filter(l => l.status === "new").length },
                       { label: "Upcoming Visits", value: totals?.upcomingAppointments ?? 0 },
                     ].map(s => (
                       <div key={s.label} className="p-4 border rounded-xl">
@@ -410,6 +451,7 @@ export default function Dashboard() {
                   </div>
                   <div className="flex gap-3 mb-6">
                     <button onClick={() => setTab("Reports")} className="px-4 py-2 border rounded-lg text-sm">Full Reports</button>
+                    <button onClick={() => setTab("Leads")} className="px-4 py-2 border rounded-lg text-sm">Leads</button>
                     <button onClick={() => setTab("Appointments")} className="px-4 py-2 border rounded-lg text-sm">Appointments</button>
                     <button onClick={() => setTab("Hours")} className="px-4 py-2 border rounded-lg text-sm">Hours & Closures</button>
                   </div>
@@ -421,6 +463,7 @@ export default function Dashboard() {
                           <div>
                             <span className="font-medium">{c.caller_number || "Unknown"}</span>
                             <span className="text-gray-400 text-sm ml-2">{Math.round((c.duration_seconds || 0) / 60)}m</span>
+                            <IntentBadge intent={c.intent} />
                             {c.transferred && <span className="ml-2 text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Transferred</span>}
                             <p className="text-sm text-gray-500 mt-1 whitespace-pre-wrap">{plainSummary(c.summary) || "No summary"}</p>
                           </div>
@@ -436,8 +479,8 @@ export default function Dashboard() {
 
           {tab === "Reports" && (
             <div>
-              <h2 className="text-2xl font-bold mb-2">Call & Appointment Reports</h2>
-              <p className="text-gray-500 text-sm mb-6">Usage and outcomes for your AI receptionist.</p>
+              <h2 className="text-2xl font-bold mb-2">Call Analytics</h2>
+              <p className="text-gray-500 text-sm mb-6">Usage, intents, peak hours, and outcomes. Max call length: 8 minutes.</p>
               {!business ? <p className="text-gray-400">Set up business first.</p> : (
                 <>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -449,6 +492,9 @@ export default function Dashboard() {
                       { label: "Calls (7d)", value: totals?.callsThisWeek ?? 0 },
                       { label: "All Appointments", value: totals?.appointmentsTotal ?? 0 },
                       { label: "Upcoming Visits", value: totals?.upcomingAppointments ?? 0 },
+                      { label: "Total Leads", value: totals?.leadsTotal ?? leads.length },
+                      { label: "New Leads", value: totals?.newLeads ?? 0 },
+                      { label: "8min Cap Hits", value: totals?.maxDurationHits ?? 0 },
                       { label: "Products", value: products.length },
                     ].map(s => (
                       <div key={s.label} className="p-4 border rounded-xl">
@@ -471,13 +517,51 @@ export default function Dashboard() {
                     </div>
                   )}
 
+                  {!!report?.intentBreakdown?.length && (
+                    <>
+                      <h3 className="font-medium mb-3">Call intents</h3>
+                      <div className="flex flex-wrap gap-3 mb-8">
+                        {report.intentBreakdown.map(i => (
+                          <div key={i.intent} className="px-4 py-3 border rounded-xl flex items-center gap-3">
+                            <IntentBadge intent={i.intent} />
+                            <span className="text-xl font-bold">{i.count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+
+                  {!!report?.callsByHour?.length && (
+                    <>
+                      <h3 className="font-medium mb-3">Peak hours (last 7 days)</h3>
+                      <div className="flex items-end gap-1 h-32 mb-8 border rounded-xl p-4 overflow-x-auto">
+                        {Array.from({ length: 24 }, (_, hour) => {
+                          const entry = report.callsByHour?.find(h => h.hour === hour);
+                          const count = entry?.count || 0;
+                          return (
+                            <div key={hour} className="flex flex-col items-center justify-end h-full min-w-[20px]">
+                              <div className="w-full bg-indigo-500 rounded-t" style={{ height: `${(count / maxHour) * 100}%`, minHeight: count ? 6 : 0 }} />
+                              <span className="text-[9px] text-gray-400 mt-1">{hour}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+
                   <div className="grid md:grid-cols-2 gap-6">
                     <div>
                       <h3 className="font-medium mb-3">Recent call summaries</h3>
                       <div className="space-y-2">
                         {(report?.recentCalls || calls).slice(0, 8).map(c => (
                           <div key={c.id} className="p-3 border rounded-lg text-sm">
-                            <div className="flex justify-between"><span className="font-medium">{c.caller_number}</span><span className="text-gray-400">{new Date(c.created_at).toLocaleString()}</span></div>
+                            <div className="flex justify-between items-start gap-2">
+                              <span className="font-medium">{c.caller_number}</span>
+                              <div className="flex items-center gap-2">
+                                <IntentBadge intent={c.intent} />
+                                <span className="text-gray-400">{new Date(c.created_at).toLocaleString()}</span>
+                              </div>
+                            </div>
                             <p className="text-gray-500 mt-1 whitespace-pre-wrap">{plainSummary(c.summary) || "No summary"}</p>
                           </div>
                         ))}
@@ -485,15 +569,16 @@ export default function Dashboard() {
                       </div>
                     </div>
                     <div>
-                      <h3 className="font-medium mb-3">Upcoming appointments</h3>
+                      <h3 className="font-medium mb-3">Recent leads</h3>
                       <div className="space-y-2">
-                        {(report?.upcomingAppointments || []).map(a => (
-                          <div key={a.id} className="p-3 border rounded-lg text-sm">
-                            <div className="font-medium">{a.customer_name}</div>
-                            <div className="text-gray-500">{new Date(a.scheduled_at).toLocaleString()} · {a.showroom}</div>
+                        {(report?.recentLeads || leads).slice(0, 5).map(l => (
+                          <div key={l.id} className="p-3 border rounded-lg text-sm">
+                            <div className="font-medium">{l.name}</div>
+                            <div className="text-gray-500">{l.phone || l.caller_number} · {l.interest || "Callback"}</div>
+                            <p className="text-gray-400 mt-1">{l.message || "—"}</p>
                           </div>
                         ))}
-                        {!report?.upcomingAppointments?.length && <p className="text-gray-400">No upcoming visits.</p>}
+                        {!leads.length && <p className="text-gray-400">No leads captured yet.</p>}
                       </div>
                     </div>
                   </div>
@@ -735,7 +820,9 @@ export default function Dashboard() {
                         <div className="flex items-center gap-3">
                           <span className="font-medium">{c.caller_number || "Unknown"}</span>
                           <span className="text-sm text-gray-400">{Math.floor((c.duration_seconds || 0) / 60)}m {(c.duration_seconds || 0) % 60}s</span>
+                          <IntentBadge intent={c.intent} />
                           {c.transferred && <span className="text-xs px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full">Transferred</span>}
+                          {c.status === "max_duration" && <span className="text-xs px-2 py-0.5 bg-amber-100 text-amber-800 rounded-full">8min cap</span>}
                         </div>
                         <span className="text-sm text-gray-400">{new Date(c.created_at).toLocaleString()}</span>
                       </div>
@@ -748,6 +835,50 @@ export default function Dashboard() {
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "Leads" && (
+            <div>
+              <h2 className="text-2xl font-bold mb-2">Leads & Callbacks</h2>
+              <p className="text-gray-500 text-sm mb-6">
+                Captured when callers request a callback, leave a message, or transfer is unavailable after hours.
+              </p>
+              {!business ? <p className="text-gray-400">Set up business first.</p> : (
+                <div className="space-y-3">
+                  {leads.map(l => (
+                    <div key={l.id} className="p-4 border rounded-xl">
+                      <div className="flex flex-wrap justify-between gap-2 mb-2">
+                        <div>
+                          <span className="font-medium">{l.name}</span>
+                          <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
+                            l.status === "new" ? "bg-yellow-100 text-yellow-800" :
+                            l.status === "contacted" ? "bg-blue-100 text-blue-800" :
+                            "bg-gray-100 text-gray-600"
+                          }`}>{l.status}</span>
+                          <span className="ml-2 text-xs text-gray-400">{l.source}</span>
+                        </div>
+                        <span className="text-sm text-gray-400">{new Date(l.created_at).toLocaleString()}</span>
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        {l.phone || l.caller_number || "No phone"} {l.email ? `· ${l.email}` : ""}
+                      </div>
+                      {l.interest && <p className="text-sm mt-1"><span className="font-medium">Interest:</span> {l.interest}</p>}
+                      {l.message && <p className="text-sm text-gray-500 mt-1">{l.message}</p>}
+                      <div className="flex gap-2 mt-3">
+                        {l.status === "new" && (
+                          <button onClick={() => updateLeadStatus(l.id, "contacted")} className="text-sm text-blue-600">Mark contacted</button>
+                        )}
+                        {l.status !== "closed" && (
+                          <button onClick={() => updateLeadStatus(l.id, "closed")} className="text-sm text-gray-500">Close</button>
+                        )}
+                        <button onClick={() => deleteLead(l.id)} className="text-sm text-red-500">Delete</button>
+                      </div>
+                    </div>
+                  ))}
+                  {!leads.length && <p className="text-gray-400">No leads yet. They appear when the AI uses captureLead during a call.</p>}
                 </div>
               )}
             </div>

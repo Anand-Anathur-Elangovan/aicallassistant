@@ -5,8 +5,11 @@ import {
   searchKnowledge,
   callClaude,
   sendCallSummary,
+  MAX_CALL_DURATION_SECONDS,
 } from "@/lib/config";
 import { getAvailableSlots, bookAppointment } from "@/lib/scheduling";
+import { getStaffAvailability } from "@/lib/store-status";
+import { classifyCallIntent } from "@/lib/call-intent";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -124,6 +127,13 @@ export async function POST(req: NextRequest) {
 
     // transferToAgent — Live Call Control transfer (same call bridged to human)
     if (fnName === "transferToAgent" || fnName === "transfer_call") {
+      const staffStatus = await getStaffAvailability(business.id);
+      if (!staffStatus.available) {
+        return NextResponse.json({
+          result: `Staff are not available right now (${staffStatus.reason || "outside business hours"}). I cannot transfer live calls at this time. Please use captureLead to record the caller's name, phone, and reason — tell them the team will call back when we reopen${staffStatus.hoursLabel ? ` (hours: ${staffStatus.hoursLabel})` : ""}.`,
+        });
+      }
+
       const { data: agents } = await supabaseAdmin
         .from("agents")
         .select("*")
@@ -267,8 +277,44 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // captureLead — callback / message capture
+    if (fnName === "captureLead") {
+      const callerNumber =
+        call?.customer?.number ||
+        message?.call?.customer?.number ||
+        body?.call?.customer?.number ||
+        null;
+      const vapiCallId = call?.id || message?.call?.id || body?.call?.id || null;
+      const phone = args.phone || callerNumber || null;
+
+      const { error } = await supabaseAdmin.from("leads").insert({
+        business_id: business.id,
+        name: args.name,
+        phone,
+        email: args.email || null,
+        interest: args.interest || null,
+        message: args.message || args.reason || null,
+        source: "ai",
+        status: "new",
+        vapi_call_id: vapiCallId,
+        caller_number: callerNumber,
+      });
+
+      if (error) {
+        console.error("captureLead failed:", error);
+        return NextResponse.json({
+          result: "I had trouble saving your details. Please try again or call back during business hours.",
+        });
+      }
+
+      return NextResponse.json({
+        result: `Callback request saved for ${args.name}${phone ? ` at ${phone}` : ""}. Confirm with the caller that the team will call them back during business hours.`,
+      });
+    }
+
     // checkAvailability
     if (fnName === "checkAvailability") {
+      const staffStatus = await getStaffAvailability(business.id);
       const fromDate =
         args.from_date || new Date().toISOString().slice(0, 10);
       const { available, closedNotes } = await getAvailableSlots(
@@ -277,6 +323,9 @@ export async function POST(req: NextRequest) {
         14,
         args.showroom
       );
+      const nowNote = staffStatus.available
+        ? "The showroom is open right now for visits."
+        : `Note: The showroom is NOT open for walk-ins right now (${staffStatus.reason}). You can still book a future visit slot below.`;
       const closedText = closedNotes.length
         ? `\nClosed / unavailable dates:\n${closedNotes
             .map(
@@ -294,7 +343,7 @@ export async function POST(req: NextRequest) {
             .join("\n")
         : "No open slots in the next 2 weeks.";
       return NextResponse.json({
-        result: `Available appointment slots:\n${availText}${closedText}\n\nOffer closed dates' reasons to the caller and suggest another available slot.`,
+        result: `${nowNote}\n\nAvailable appointment slots:\n${availText}${closedText}\n\nOffer closed dates' reasons to the caller and suggest another available slot.`,
       });
     }
 
@@ -368,6 +417,15 @@ export async function POST(req: NextRequest) {
       call?.destination?.number ||
       null;
 
+    const intent = await classifyCallIntent(
+      callSummary || "",
+      transcript || ""
+    );
+
+    const hitMaxDuration =
+      duration >= MAX_CALL_DURATION_SECONDS - 15 ||
+      call?.endedReason === "max-duration-exceeded";
+
     await supabaseAdmin.from("call_logs").insert({
       business_id: business.id,
       vapi_call_id: call?.id,
@@ -375,9 +433,10 @@ export async function POST(req: NextRequest) {
       duration_seconds: duration,
       transcript: transcript || "",
       summary: callSummary || "",
-      status: call?.endedReason || "completed",
+      status: hitMaxDuration ? "max_duration" : call?.endedReason || "completed",
       transferred: !!transferredTo,
       transferred_to: transferredTo,
+      intent,
     });
 
     await sendCallSummary(business, {
