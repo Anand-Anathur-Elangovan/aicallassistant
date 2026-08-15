@@ -18,7 +18,7 @@ CREATE TABLE businesses (
   phone TEXT,
   working_hours JSONB DEFAULT '{"mon-fri": "9:00-18:00", "sat": "10:00-14:00", "sun": "closed"}',
   language TEXT DEFAULT 'en',
-  voice_id TEXT DEFAULT 'rachel',
+  voice_id TEXT DEFAULT 'Elliot',
   vapi_assistant_id TEXT,
   vapi_phone_id TEXT,
   notification_email TEXT,

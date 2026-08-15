@@ -276,21 +276,49 @@ export function buildVapiTools() {
   ];
 }
 
-export const VOICE_OPTIONS = [
-  { id: "Elliot", label: "Elliot (Male)", provider: "vapi" },
-  { id: "Rohan", label: "Rohan (Male)", provider: "vapi" },
-  { id: "Savannah", label: "Savannah (Female)", provider: "vapi" },
-  { id: "Neha", label: "Neha (Female)", provider: "vapi" },
-  { id: "rachel", label: "Rachel (Female)", provider: "11labs" },
-  { id: "adam", label: "Adam (Male)", provider: "11labs" },
-  { id: "bella", label: "Bella (Female)", provider: "11labs" },
-  { id: "drew", label: "Drew (Male)", provider: "11labs" },
-] as const;
+import { VOICE_OPTIONS } from "./voices";
+
+export { VOICE_OPTIONS };
 
 export function resolveVoice(voiceId?: string) {
   const found = VOICE_OPTIONS.find((v) => v.id === voiceId);
   if (found) return { provider: found.provider, voiceId: found.id };
   return { provider: "vapi", voiceId: "Elliot" };
+}
+
+/** ElevenLabs voices need a BYO API key in Vapi → Credentials. */
+export function isElevenLabsVoice(voiceId?: string) {
+  const found = VOICE_OPTIONS.find((v) => v.id === voiceId);
+  return found?.provider === "11labs";
+}
+
+export function validateVoiceForVapi(voiceId?: string): string | null {
+  const id = voiceId || "Elliot";
+  const found = VOICE_OPTIONS.find((v) => v.id === id);
+  if (!found) {
+    return `Unknown voice "${id}". Choose Elliot, Savannah, or another voice from the list.`;
+  }
+  if (found.provider === "11labs") {
+    return (
+      `"${found.label}" uses ElevenLabs. Add your ElevenLabs API key in Vapi → Credentials, ` +
+      `or switch to a Vapi voice (Elliot, Rohan, Savannah, Neha) — no extra setup required.`
+    );
+  }
+  return null;
+}
+
+/** Map legacy/default 11labs IDs to Vapi voices when pushing without BYO credentials. */
+export function normalizeVoiceIdForPush(voiceId?: string) {
+  if (!voiceId || isElevenLabsVoice(voiceId)) {
+    const map: Record<string, string> = {
+      rachel: "Savannah",
+      bella: "Savannah",
+      adam: "Elliot",
+      drew: "Rohan",
+    };
+    return map[voiceId || ""] || "Elliot";
+  }
+  return voiceId;
 }
 
 /** Map app language setting to Deepgram/Vapi transcriber language */
@@ -311,10 +339,18 @@ export function resolveTranscriberLanguage(lang?: string) {
 export function buildVoicePayload(business: {
   voice_id?: string;
   voice_speed?: number;
+  forceVapiProvider?: boolean;
 }) {
-  const { provider, voiceId } = resolveVoice(business.voice_id);
+  let voiceId = business.voice_id;
+  if (business.forceVapiProvider) {
+    voiceId = normalizeVoiceIdForPush(voiceId);
+  } else {
+    const err = validateVoiceForVapi(voiceId);
+    if (err) throw new Error(err);
+  }
+  const { provider, voiceId: resolved } = resolveVoice(voiceId);
   const speed = business.voice_speed ?? 1;
-  const voice: Record<string, unknown> = { provider, voiceId };
+  const voice: Record<string, unknown> = { provider, voiceId: resolved };
   if (speed && Math.abs(speed - 1) > 0.01) {
     voice.speed = speed;
   }
@@ -345,7 +381,8 @@ export type BusinessForVapi = Parameters<typeof buildSystemPrompt>[0] & {
 
 export function buildAssistantPayload(
   business: BusinessForVapi,
-  serverUrl?: string
+  serverUrl?: string,
+  options?: { forceVapiProvider?: boolean }
 ) {
   const systemPrompt = buildSystemPrompt(business);
   const firstMessage =
@@ -356,7 +393,7 @@ export function buildAssistantPayload(
     firstMessage,
     maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
     backgroundSound: buildBackgroundSound(business),
-    voice: buildVoicePayload(business),
+    voice: buildVoicePayload({ ...business, forceVapiProvider: options?.forceVapiProvider }),
     model: {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
@@ -390,7 +427,11 @@ export async function createVapiAssistant(
   business: BusinessForVapi & { voice_id?: string; language?: string },
   serverUrl: string
 ) {
-  return vapiRequest("/assistant", "POST", buildAssistantPayload(business, serverUrl));
+  return vapiRequest(
+    "/assistant",
+    "POST",
+    buildAssistantPayload(business, serverUrl, { forceVapiProvider: true })
+  );
 }
 
 export async function updateVapiAssistant(

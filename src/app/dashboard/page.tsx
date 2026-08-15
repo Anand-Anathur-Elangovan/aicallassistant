@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { SiteHeader } from "@/components/SiteHeader";
+import { VAPI_VOICES, ELEVENLABS_VOICES } from "@/lib/voices";
 import { useRouter } from "next/navigation";
 
 type Business = {
@@ -62,16 +63,6 @@ type Report = {
 const TABS = ["Overview", "Reports", "Assistant", "Products", "Knowledge", "Appointments", "Hours", "Calls", "Leads", "Transfers", "Agents", "Offers", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const VOICES = [
-  { id: "Elliot", label: "Elliot (Male)" },
-  { id: "Rohan", label: "Rohan (Male)" },
-  { id: "Savannah", label: "Savannah (Female)" },
-  { id: "Neha", label: "Neha (Female)" },
-  { id: "rachel", label: "Rachel (Female)" },
-  { id: "adam", label: "Adam (Male)" },
-  { id: "bella", label: "Bella (Female)" },
-  { id: "drew", label: "Drew (Male)" },
-];
 
 async function api(method: string, body?: Record<string, unknown>, params?: Record<string, string>) {
   const { data: { session } } = await supabase.auth.getSession();
@@ -264,7 +255,11 @@ export default function Dashboard() {
     const res = await api("POST", { action: "sync_to_vapi", business_id: business.id });
     if (res.ok) {
       await loadVapiStatus(business.id);
-      alert("Pushed to Vapi — live assistant updated.");
+      if (res.voiceAdjusted) {
+        setBizForm({ ...bizForm, voice_id: res.voiceAdjusted });
+        setBusiness({ ...business, voice_id: res.voiceAdjusted });
+      }
+      alert(res.message || "Pushed to Vapi — live assistant updated.");
     } else alert(res.error || "Sync to Vapi failed");
     setSaving(false);
   }
@@ -715,8 +710,16 @@ export default function Dashboard() {
                     <div>
                       <label className="block text-sm font-medium mb-1">Voice</label>
                       <select value={bizForm.voice_id} onChange={e => setBizForm({ ...bizForm, voice_id: e.target.value })} className="w-full px-4 py-2 border rounded-lg">
-                        {VOICES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                        <optgroup label="Vapi voices (recommended — no extra setup)">
+                          {VAPI_VOICES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                        </optgroup>
+                        <optgroup label="ElevenLabs (add API key in Vapi Credentials)">
+                          {ELEVENLABS_VOICES.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                        </optgroup>
                       </select>
+                      {["rachel", "adam", "bella", "drew"].includes(bizForm.voice_id) && (
+                        <p className="text-xs text-amber-600 mt-1">ElevenLabs voices require your API key in Vapi → Credentials, or Push will auto-switch to a Vapi voice.</p>
+                      )}
                     </div>
                   </div>
                   <div>

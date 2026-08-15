@@ -4,6 +4,9 @@ import {
   createVapiAssistant,
   generateEmbedding,
   MAX_CALL_DURATION_SECONDS,
+  validateVoiceForVapi,
+  isElevenLabsVoice,
+  normalizeVoiceIdForPush,
 } from "@/lib/config";
 import { createClient } from "@supabase/supabase-js";
 import { ensureDefaultStoreHours } from "@/lib/scheduling";
@@ -272,7 +275,18 @@ export async function POST(req: NextRequest) {
       const catalog = await loadBusinessCatalog(id, user.id);
       if (catalog) {
         try {
-          await syncToVapi(biz.vapi_assistant_id, { ...catalog, ...updates });
+          const voiceWarning = validateVoiceForVapi(catalog.voice_id);
+          const forceVapi = !!voiceWarning;
+          await syncToVapi(biz.vapi_assistant_id, { ...catalog, ...updates }, {
+            forceVapiProvider: forceVapi,
+          });
+          if (forceVapi && isElevenLabsVoice(catalog.voice_id || updates.voice_id)) {
+            const safeId = normalizeVoiceIdForPush(catalog.voice_id || updates.voice_id);
+            await supabaseAdmin
+              .from("businesses")
+              .update({ voice_id: safeId })
+              .eq("id", id);
+          }
           await supabaseAdmin
             .from("businesses")
             .update({ vapi_synced_at: new Date().toISOString() })
@@ -294,13 +308,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No Vapi assistant linked" }, { status: 400 });
     }
     try {
-      await syncToVapi(catalog.vapi_assistant_id, catalog);
+      const voiceWarning = validateVoiceForVapi(catalog.voice_id);
+      const forceVapi = !!voiceWarning;
+      await syncToVapi(catalog.vapi_assistant_id, catalog, { forceVapiProvider: forceVapi });
       const now = new Date().toISOString();
-      await supabaseAdmin
-        .from("businesses")
-        .update({ vapi_synced_at: now })
-        .eq("id", business_id);
-      return NextResponse.json({ ok: true, syncedAt: now });
+      const patch: Record<string, string> = { vapi_synced_at: now };
+      if (forceVapi && isElevenLabsVoice(catalog.voice_id)) {
+        patch.voice_id = normalizeVoiceIdForPush(catalog.voice_id);
+      }
+      await supabaseAdmin.from("businesses").update(patch).eq("id", business_id);
+      return NextResponse.json({
+        ok: true,
+        syncedAt: now,
+        voiceAdjusted: forceVapi ? patch.voice_id : undefined,
+        message: forceVapi
+          ? `Pushed using Vapi voice "${patch.voice_id}" (ElevenLabs needs API key in Vapi Credentials).`
+          : undefined,
+      });
     } catch (e) {
       return NextResponse.json(
         { error: e instanceof Error ? e.message : "Sync failed" },

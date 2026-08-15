@@ -110,8 +110,12 @@ export function compareVapiWithAppFull(
   return result;
 }
 
-export async function syncToVapi(assistantId: string, business: BusinessForVapi) {
-  const payload = buildAssistantPayload(business);
+export async function syncToVapi(
+  assistantId: string,
+  business: BusinessForVapi,
+  options?: { forceVapiProvider?: boolean }
+) {
+  const payload = buildAssistantPayload(business, undefined, options);
   const res = await fetch(`${VAPI_BASE}/assistant/${assistantId}`, {
     method: "PATCH",
     headers: {
