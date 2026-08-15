@@ -80,8 +80,17 @@ export function buildSystemPrompt(business: {
   return `You are a professional, warm, and helpful receptionist for ${business.name}.
 ${business.description || ""}
 
+HOW YOU SOUND (very important):
+- You are a real person at the front desk on the phone — not a robot, not an IVR script, not reading a brochure
+- Speak naturally: use contractions (I'm, we'll, that's, you're), short sentences, and a warm friendly tone
+- Light natural fillers are good when a human would pause — e.g. "um", "ah", "let me see", "sure", "yeah", "right"
+- Use fillers sparingly (roughly one every few sentences max) — never overdo it or sound unsure on facts
+- Acknowledge before answering: "Good question", "Sure thing", "Yeah, absolutely", "Right, so..."
+- Vary your wording — do NOT repeat the same scripted phrase twice in one call
+- Never list things like bullet points aloud; weave information into normal conversation
+- When you need a moment to look something up, say it naturally: "Let me just check that for you, um, one sec"
+
 CORE RULES:
-- Always be polite, professional, and conversational — sound like a real human receptionist
 - Speak in the caller's language. Default: ${
     business.language === "multi" || business.language === "auto"
       ? "Auto-detect from the caller (English, Italian, Tamil, Hindi, etc.)"
@@ -125,6 +134,11 @@ LEADS / CALLBACKS (captureLead tool):
 - Use when: caller wants a callback, transfer failed, after-hours transfer request, or they ask to leave a message
 - Collect: name (required), phone, what they're interested in, and a short message
 - Confirm the team will call back during business hours`;
+}
+
+/** Natural spoken greeting — fixed first line callers hear (TTS reads this verbatim). */
+export function buildFirstMessage(businessName: string) {
+  return `Hello! Thank you for calling, um, ${businessName}. How can I help you today?`;
 }
 
 export const MAX_CALL_DURATION_SECONDS = 480;
@@ -307,12 +321,13 @@ export async function createVapiAssistant(
     model: {
       provider: "anthropic",
       model: "claude-haiku-4-5-20251001",
+      temperature: 0.82,
       messages: [{ role: "system", content: systemPrompt }],
       tools: buildVapiTools(),
     },
     maxDurationSeconds: MAX_CALL_DURATION_SECONDS,
     voice: resolveVoice(business.voice_id),
-    firstMessage: `Hello, thank you for calling ${business.name}. How can I help you today?`,
+    firstMessage: buildFirstMessage(business.name),
     serverUrl,
     serverUrlSecret: process.env.VAPI_SERVER_SECRET || undefined,
     endCallPhrases: [

@@ -8,6 +8,7 @@ import {
   resolveVoice,
   resolveTranscriberLanguage,
   buildVapiTools,
+  buildFirstMessage,
   MAX_CALL_DURATION_SECONDS,
 } from "@/lib/config";
 import { createClient } from "@supabase/supabase-js";
@@ -237,6 +238,7 @@ export async function POST(req: NextRequest) {
         model: {
           provider: "anthropic",
           model: "claude-haiku-4-5-20251001",
+          temperature: 0.82,
           messages: [{ role: "system", content: systemPrompt }],
           tools: buildVapiTools(),
         },
@@ -244,7 +246,7 @@ export async function POST(req: NextRequest) {
         voice: resolveVoice(
           (updates.voice_id as string) || merged.voice_id
         ),
-        firstMessage: `Hello, thank you for calling ${merged.name}. How can I help you today?`,
+        firstMessage: buildFirstMessage(merged.name),
         transcriber: {
           provider: "deepgram",
           model: "nova-2",
